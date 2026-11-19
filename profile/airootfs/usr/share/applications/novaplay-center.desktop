@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=NovaPlay Center
+Comment=Willkommen, Spiele-Launcher, Updates, Backups und Hilfe
+Exec=/usr/local/bin/novaplay-center
+Icon=input-gaming
+Categories=System;Game;

@@ -1,0 +1,41 @@
+[Plymouth Theme]
+Name=NovaPlay
+Description=NovaPlay OS Neon-Bootanimation
+ModuleName=two-step
+
+[two-step]
+Font=Noto Sans 12
+TitleFont=Noto Sans Light 30
+MonospaceFont=DejaVu Sans Mono 12
+ImageDir=/usr/share/plymouth/themes/novaplay
+DialogHorizontalAlignment=.5
+DialogVerticalAlignment=.7
+TitleHorizontalAlignment=.5
+TitleVerticalAlignment=.382
+HorizontalAlignment=.5
+VerticalAlignment=.78
+WatermarkHorizontalAlignment=.5
+WatermarkVerticalAlignment=.42
+Transition=none
+TransitionDuration=0.0
+BackgroundStartColor=0x06041a
+BackgroundEndColor=0x000000
+ProgressBarBackgroundColor=0x2a1650
+ProgressBarForegroundColor=0xa855ff
+MessageBelowAnimation=true
+
+[boot-up]
+UseEndAnimation=false
+
+[shutdown]
+UseEndAnimation=false
+
+[reboot]
+UseEndAnimation=false
+
+[updates]
+SuppressMessages=true
+ProgressBarShowPercentComplete=true
+UseProgressBar=true
+Title=Updates werden installiert ...
+SubTitle=Bitte den Computer nicht ausschalten

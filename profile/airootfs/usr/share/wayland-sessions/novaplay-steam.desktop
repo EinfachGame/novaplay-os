@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=NovaPlay Konsolen-Modus (Steam)
+Comment=Steam Big Picture im Vollbild – wie auf einer Konsole
+Exec=/usr/local/bin/novaplay-steam-session
+Type=Application
+DesktopNames=gamescope

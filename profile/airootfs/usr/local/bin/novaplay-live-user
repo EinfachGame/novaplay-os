@@ -1,0 +1,9 @@
+#!/bin/bash
+# Legt im Live-System den Benutzer "gamer" (Passwort: gamer) an.
+set -e
+id gamer &>/dev/null && exit 0
+useradd -m -G wheel,audio,video,input -c "NovaPlay Gamer" -s /bin/bash gamer
+echo 'gamer:gamer' | chpasswd
+# Installer-Verknüpfung auf den Desktop legen
+install -d -o gamer -g gamer -m755 /home/gamer/Desktop
+install -m755 -o gamer -g gamer /usr/share/applications/novaplay-install.desktop /home/gamer/Desktop/novaplay-install.desktop

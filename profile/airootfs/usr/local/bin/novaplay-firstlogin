@@ -1,0 +1,40 @@
+#!/bin/bash
+# Wird bei der ersten Anmeldung jedes Benutzers einmal ausgeführt und
+# richtet das komplette NovaPlay-Design ein.
+FLAG="$HOME/.config/novaplay-firstlogin-done"
+WP=/usr/share/wallpapers/novaplay-synthwave.png
+LOCK=/usr/share/wallpapers/novaplay-hex.png
+[ -f "$FLAG" ] && exit 0
+sleep 6
+
+# Design: dunkle Grundlage, NovaPlay-Farben, Papirus-Icons
+plasma-apply-lookandfeel -a org.kde.breezedark.desktop >/dev/null 2>&1
+plasma-apply-colorscheme NovaPlay >/dev/null 2>&1
+if [ -x /usr/lib/plasma-changeicons ]; then
+    /usr/lib/plasma-changeicons Papirus-Dark >/dev/null 2>&1
+else
+    kwriteconfig6 --file kdeglobals --group Icons --key Theme Papirus-Dark
+fi
+
+# Hintergrund auf Desktop (Synthwave) und Sperrbildschirm (Sechsecke)
+plasma-apply-wallpaperimage "$WP" >/dev/null 2>&1
+kwriteconfig6 --file kscreenlockerrc --group Greeter --group Wallpaper --group org.kde.image --group General --key Image "file://$LOCK"
+kwriteconfig6 --file kscreenlockerrc --group Greeter --group Wallpaper --group org.kde.image --group General --key PreviewImage "file://$LOCK"
+kwriteconfig6 --file ksplashrc --group KSplash --key Theme None
+
+# Terminal im NovaPlay-Look
+kwriteconfig6 --file konsolerc --group "Desktop Entry" --key DefaultProfile NovaPlay.profile
+
+# Gaming-Verknüpfungen auf den Desktop
+DESK="$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")"
+mkdir -p "$DESK"
+for app in /usr/share/applications/steam.desktop \
+           /usr/share/applications/net.lutris.Lutris.desktop \
+           /usr/share/applications/novaplay-center.desktop \
+           /var/lib/flatpak/exports/share/applications/com.discordapp.Discord.desktop \
+           /var/lib/flatpak/exports/share/applications/com.heroicgameslauncher.hgl.desktop \
+           /var/lib/flatpak/exports/share/applications/net.davidotek.pupgui2.desktop; do
+    [ -f "$app" ] && install -m755 "$app" "$DESK/"
+done
+
+mkdir -p "$HOME/.config" && touch "$FLAG"

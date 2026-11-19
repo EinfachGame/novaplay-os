@@ -1,0 +1,23 @@
+{
+  "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
+  "logo": {
+    "source": "/usr/share/novaplay/logo.txt",
+    "color": { "1": "magenta", "2": "cyan" },
+    "padding": { "top": 1, "right": 3 }
+  },
+  "display": { "separator": "  ", "color": { "keys": "magenta" } },
+  "modules": [
+    { "type": "custom", "format": "\u001b[1;35mNOVA\u001b[1;36mPLAY\u001b[0m OS" },
+    "separator",
+    { "type": "os", "key": "System " },
+    { "type": "kernel", "key": "Kernel " },
+    { "type": "cpu", "key": "CPU    " },
+    { "type": "gpu", "key": "GPU    " },
+    { "type": "memory", "key": "RAM    " },
+    { "type": "disk", "key": "Disk   ", "folders": "/" },
+    { "type": "display", "key": "Display" },
+    { "type": "uptime", "key": "Uptime " },
+    "break",
+    "colors"
+  ]
+}

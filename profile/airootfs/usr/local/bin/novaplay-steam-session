@@ -1,0 +1,5 @@
+#!/bin/bash
+# Startet Steam im Konsolen-Modus (Big Picture) in gamescope.
+# "Beenden" in Steam bringt dich zurück zum Anmeldebildschirm.
+export STEAM_GAMESCOPE_COLOR_TOYS=1
+exec gamescope -e -f -- steam -gamepadui

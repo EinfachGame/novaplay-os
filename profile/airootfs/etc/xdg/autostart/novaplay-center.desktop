@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=NovaPlay Center
+Exec=/usr/local/bin/novaplay-center --autostart
+Icon=input-gaming
+OnlyShowIn=KDE;
+X-KDE-autostart-after=panel

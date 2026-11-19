@@ -1,0 +1,27 @@
+#!/bin/bash
+# NovaPlay OS – einmalige Einrichtung beim ersten Start des installierten Systems.
+# Läuft als Systemdienst (novaplay-firstboot.service) und wiederholt sich bei
+# Fehlern (z. B. noch kein Internet) automatisch, bis alles geklappt hat.
+set -u
+DONE=/var/lib/novaplay/firstboot-done
+[ -f "$DONE" ] && exit 0
+
+echo "==> Firewall einrichten"
+ufw default deny incoming
+ufw default allow outgoing
+ufw allow 1714:1764/udp comment 'KDE Connect'
+ufw allow 1714:1764/tcp comment 'KDE Connect'
+ufw allow 27031:27036/udp comment 'Steam Remote Play / LAN'
+ufw allow 27036:27037/tcp comment 'Steam Remote Play / LAN'
+ufw --force enable
+
+echo "==> Schnellste Download-Server suchen"
+timeout 120 reflector --latest 20 --protocol https --sort rate --save /etc/pacman.d/mirrorlist || true
+
+echo "==> Heroic, ProtonUp-Qt und Discord installieren (Flatpak)"
+flatpak remote-add --system --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo || exit 1
+flatpak install --system --noninteractive -y flathub \
+    com.heroicgameslauncher.hgl net.davidotek.pupgui2 com.discordapp.Discord || exit 1
+
+mkdir -p /var/lib/novaplay && touch "$DONE"
+echo "==> Ersteinrichtung abgeschlossen"

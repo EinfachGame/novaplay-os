@@ -1,0 +1,14 @@
+[Unit]
+Description=NovaPlay Ersteinrichtung (Firewall, Server, Heroic/ProtonUp-Qt/Discord)
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=!/var/lib/novaplay/firstboot-done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/novaplay-firstboot
+Restart=on-failure
+RestartSec=120
+
+[Install]
+WantedBy=multi-user.target

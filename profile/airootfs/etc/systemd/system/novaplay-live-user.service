@@ -1,0 +1,12 @@
+[Unit]
+Description=NovaPlay Live-Benutzer anlegen
+After=systemd-sysusers.service systemd-tmpfiles-setup.service
+Before=display-manager.service systemd-user-sessions.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/novaplay-live-user
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

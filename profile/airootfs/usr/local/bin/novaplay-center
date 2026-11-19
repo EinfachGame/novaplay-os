@@ -1,0 +1,260 @@
+#!/usr/bin/env python3
+"""NovaPlay Center – Willkommens- und Steuerzentrum von NovaPlay OS.
+
+Start:  novaplay-center            (normal)
+        novaplay-center --autostart (beim Anmelden; zeigt sich nur, wenn
+                                     "Beim Start anzeigen" aktiv ist)
+"""
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+from PyQt6.QtCore import Qt, QProcess, QSize
+from PyQt6.QtGui import QIcon, QPixmap
+from PyQt6.QtWidgets import (
+    QApplication, QCheckBox, QGridLayout, QHBoxLayout, QLabel, QMessageBox,
+    QPushButton, QScrollArea, QVBoxLayout, QWidget,
+)
+
+VERSION = "1.0"
+HELP_URL = "https://github.com/EinfachGame/novaplay-os"
+LOGO = "/usr/share/plymouth/themes/novaplay/watermark.png"
+HIDE_FLAG = Path.home() / ".config" / "novaplay-center-hidden"
+IS_LIVE = Path("/run/archiso").exists()
+FLATHUB = "https://dl.flathub.org/repo/flathub.flatpakrepo"
+
+STYLE = """
+QWidget { background: #0c0818; color: #f0ebff; font-size: 11pt; }
+QLabel#subtitle { color: #00dcff; font-size: 12pt; }
+QLabel#section { color: #a855ff; font-size: 13pt; font-weight: bold; margin-top: 10px; }
+QPushButton#tile, QPushButton#bigtile {
+    background: #1a1030; border: 2px solid #2e1d55; border-radius: 14px;
+    padding: 12px; text-align: left;
+}
+QPushButton#tile:hover { border-color: #a855ff; background: #24163f; }
+QPushButton#tile:pressed, QPushButton#bigtile:pressed { background: #2e1d55; }
+QPushButton#bigtile { border-color: #00dcff; background: #0f2236; }
+QPushButton#bigtile:hover { background: #133049; }
+QCheckBox { color: #b8acd8; }
+QScrollArea { border: none; }
+"""
+
+
+def has(cmd):
+    return shutil.which(cmd) is not None
+
+
+def flatpak_installed(app_id):
+    if not has("flatpak"):
+        return False
+    r = subprocess.run(["flatpak", "info", app_id], capture_output=True)
+    return r.returncode == 0
+
+
+def run_detached(cmd):
+    QProcess.startDetached(cmd[0], cmd[1:])
+
+
+def run_in_terminal(shell_cmd):
+    """Zeigt längere Vorgänge sichtbar im Terminal an."""
+    run_detached(["konsole", "--hold", "-e", "bash", "-c", shell_cmd])
+
+
+def flatpak_app(app_id, name):
+    def action():
+        if flatpak_installed(app_id):
+            run_detached(["flatpak", "run", app_id])
+        else:
+            run_in_terminal(
+                f"echo 'Installiere {name} ...'; "
+                f"flatpak remote-add --user --if-not-exists flathub {FLATHUB} && "
+                f"flatpak install --user -y flathub {app_id} && "
+                f"echo && echo '{name} ist installiert – das Fenster kann geschlossen werden.'"
+            )
+    return action
+
+
+def native_app(cmd, name):
+    def action():
+        if has(cmd[0]):
+            run_detached(cmd)
+        else:
+            QMessageBox.information(None, "NovaPlay Center", f"{name} ist nicht installiert.")
+    return action
+
+
+def console_mode_info():
+    QMessageBox.information(
+        None, "Konsolen-Modus",
+        "Der Konsolen-Modus startet Steam im Vollbild – wie auf einer Konsole.\n\n"
+        "So geht's: Abmelden → beim Anmeldebildschirm unten links die Sitzung\n"
+        "„NovaPlay Konsolen-Modus (Steam)“ auswählen → anmelden.\n\n"
+        "Zurück zum Desktop: in Steam „Beenden“ wählen.",
+    )
+
+
+def tile(icon_names, title, text, action, big=False):
+    btn = QPushButton()
+    btn.setObjectName("bigtile" if big else "tile")
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    btn.setMinimumHeight(86)
+    lay = QHBoxLayout(btn)
+    lay.setContentsMargins(12, 8, 12, 8)
+    icon = QIcon()
+    for n in icon_names:
+        icon = QIcon.fromTheme(n)
+        if not icon.isNull():
+            break
+    ic = QLabel()
+    ic.setPixmap(icon.pixmap(QSize(44, 44)))
+    ic.setStyleSheet("background: transparent;")
+    ic.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    txt = QLabel(f"<b style='font-size:12pt'>{title}</b><br><span style='color:#b8acd8'>{text}</span>")
+    txt.setWordWrap(True)
+    txt.setStyleSheet("background: transparent;")
+    txt.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    lay.addWidget(ic)
+    lay.addWidget(txt, 1)
+    btn.clicked.connect(action)
+    return btn
+
+
+def section(title, tiles):
+    box = QWidget()
+    v = QVBoxLayout(box)
+    v.setContentsMargins(0, 0, 0, 0)
+    lbl = QLabel(title)
+    lbl.setObjectName("section")
+    v.addWidget(lbl)
+    grid = QGridLayout()
+    grid.setSpacing(10)
+    for i, t in enumerate(tiles):
+        grid.addWidget(t, i // 2, i % 2)
+    v.addLayout(grid)
+    return box
+
+
+class Center(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("NovaPlay Center")
+        self.setWindowIcon(QIcon.fromTheme("input-gaming"))
+        self.resize(940, 720)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 16, 24, 12)
+
+        # Kopfbereich mit Logo
+        head = QHBoxLayout()
+        logo = QLabel()
+        if os.path.exists(LOGO):
+            logo.setPixmap(QPixmap(LOGO).scaledToHeight(120, Qt.TransformationMode.SmoothTransformation))
+        head.addWidget(logo)
+        welcome = QLabel(
+            "<span style='font-size:20pt; font-weight:bold'>Willkommen bei NovaPlay OS</span>"
+        )
+        sub = QLabel("Live-System – zum Ausprobieren und Installieren" if IS_LIVE
+                     else "Dein Gaming-System ist bereit. Viel Spaß!")
+        sub.setObjectName("subtitle")
+        hv = QVBoxLayout()
+        hv.addStretch()
+        hv.addWidget(welcome)
+        hv.addWidget(sub)
+        hv.addStretch()
+        head.addLayout(hv, 1)
+        root.addLayout(head)
+
+        content = QWidget()
+        cv = QVBoxLayout(content)
+        cv.setContentsMargins(0, 0, 8, 0)
+
+        if IS_LIVE:
+            cv.addWidget(tile(["system-software-install"], "NovaPlay installieren",
+                              "NovaPlay fest auf eine Festplatte installieren (die Festplatte wird gelöscht).",
+                              lambda: run_detached(["konsole", "--hold", "-e", "sudo", "/usr/local/bin/novaplay-install"]),
+                              big=True))
+
+        cv.addWidget(section("🎮  Spielen", [
+            tile(["steam"], "Steam", "Steam öffnen. Tipp: Steam Play in den Einstellungen aktivieren.",
+                 native_app(["steam"], "Steam")),
+            tile(["com.heroicgameslauncher.hgl", "applications-games"], "Heroic",
+                 "Epic Games und GOG (wird beim ersten Klick installiert, falls nötig).",
+                 flatpak_app("com.heroicgameslauncher.hgl", "Heroic")),
+            tile(["net.lutris.Lutris", "lutris"], "Lutris", "Battle.net, EA, Ubisoft und mehr.",
+                 native_app(["lutris"], "Lutris")),
+            tile(["net.davidotek.pupgui2", "applications-utilities"], "ProtonUp-Qt",
+                 "Proton-GE installieren – hilft bei Problem-Spielen.",
+                 flatpak_app("net.davidotek.pupgui2", "ProtonUp-Qt")),
+            tile(["com.discordapp.Discord", "discord", "internet-chat", "im-user"], "Discord", "Chatten mit Freunden.",
+                 flatpak_app("com.discordapp.Discord", "Discord")),
+            tile(["input-gaming"], "Konsolen-Modus", "Steam im Vollbild wie auf einer Konsole – so geht's.",
+                 console_mode_info),
+        ]))
+
+        cv.addWidget(section("🛠️  System", [
+            tile(["system-software-update"], "Updates", "Programme und System aktualisieren.",
+                 native_app(["plasma-discover", "--mode", "update"], "Discover")),
+            tile(["plasmadiscover", "plasma-discover"], "App-Store", "Tausende Apps (Discover + Flathub).",
+                 native_app(["plasma-discover"], "Discover")),
+            tile(["timeshift", "document-save"], "Backups", "Sicherungspunkte anlegen (Timeshift).",
+                 native_app(["timeshift-launcher"], "Timeshift")),
+            tile(["security-high", "firewall-config"], "Firewall", "Schutz vor Zugriffen aus dem Netz.",
+                 native_app(["systemsettings", "kcm_firewall"], "Systemeinstellungen")),
+            tile(["printer"], "Drucker", "Drucker hinzufügen und verwalten.",
+                 native_app(["systemsettings", "kcm_printer_manager"], "Systemeinstellungen")),
+            tile(["hwinfo", "computer"], "Systeminfo", "Grafikkarte, Prozessor, Arbeitsspeicher.",
+                 native_app(["kinfocenter"], "Infozentrum")),
+            tile(["preferences-desktop-theme"], "Aussehen", "Design, Farben und Hintergrund anpassen.",
+                 native_app(["systemsettings", "kcm_lookandfeel"], "Systemeinstellungen")),
+            tile(["help-browser", "help-contents"], "Hilfe", "Anleitung und Fragen auf GitHub.",
+                 lambda: run_detached(["xdg-open", HELP_URL])),
+        ]))
+        cv.addStretch()
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(content)
+        root.addWidget(scroll, 1)
+
+        foot = QHBoxLayout()
+        self.chk = QCheckBox("Beim Start anzeigen")
+        self.chk.setChecked(not HIDE_FLAG.exists())
+        self.chk.toggled.connect(self.toggle_autostart)
+        foot.addWidget(self.chk)
+        foot.addStretch()
+        foot.addWidget(QLabel(f"<span style='color:#6c5f8f'>NovaPlay Center {VERSION}</span>"))
+        root.addLayout(foot)
+
+    def toggle_autostart(self, on):
+        HIDE_FLAG.parent.mkdir(parents=True, exist_ok=True)
+        if on:
+            HIDE_FLAG.unlink(missing_ok=True)
+        else:
+            HIDE_FLAG.touch()
+
+
+def main():
+    if "--autostart" in sys.argv and HIDE_FLAG.exists():
+        return 0
+    app = QApplication(sys.argv)
+    # Symbol-Suche absichern (falls kein Desktop-Design Pfade vorgibt)
+    paths = QIcon.themeSearchPaths()
+    for extra in ("/usr/share/icons", str(Path.home() / ".local/share/icons")):
+        if extra not in paths:
+            paths.append(extra)
+    QIcon.setThemeSearchPaths(paths)
+    if not QIcon.themeName():
+        QIcon.setThemeName("Papirus-Dark")
+    QIcon.setFallbackThemeName("breeze")
+    app.setApplicationName("NovaPlay Center")
+    app.setDesktopFileName("novaplay-center")
+    app.setStyleSheet(STYLE)
+    w = Center()
+    w.show()
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,269 @@
+#!/bin/bash
+# =====================================================================
+#  NovaPlay OS – Installationsprogramm
+#  Installiert NovaPlay OS fest auf eine Festplatte (nur UEFI-PCs).
+#  ACHTUNG: Die ausgewählte Festplatte wird KOMPLETT gelöscht!
+#
+#  Optional ohne Fragen (für Profis/Tests) über Umgebungsvariablen:
+#    NP_DISK=/dev/nvme0n1 NP_USER=max NP_PASS=geheim NP_HOST=gaming-pc \
+#    NP_AUTOLOGIN=j NP_CONSOLE=n NP_YES=1 novaplay-install
+# =====================================================================
+set -euo pipefail
+
+PKGLIST=/usr/share/novaplay/packages-install.txt
+TARGET=/mnt/novaplay
+LOG=/tmp/novaplay-install.log
+
+c_ok="\e[1;32m"; c_err="\e[1;31m"; c_info="\e[1;36m"; c_off="\e[0m"
+info() { echo -e "${c_info}==>${c_off} $*"; }
+ok()   { echo -e "${c_ok}✔${c_off} $*"; }
+fail() { echo -e "${c_err}✘ FEHLER:${c_off} $*" >&2; exit 1; }
+
+trap 'echo -e "${c_err}Installation abgebrochen.${c_off} Details stehen in $LOG"' ERR
+
+ask() { # ask "Frage" "Standardwert" -> Antwort
+    local answer
+    read -r -p "$1 [$2]: " answer
+    echo "${answer:-$2}"
+}
+
+# ---------------------------------------------------------------------
+# 1) Vorab-Prüfungen
+# ---------------------------------------------------------------------
+[ "$(id -u)" -eq 0 ] || fail "Bitte mit sudo starten: sudo novaplay-install"
+[ -d /sys/firmware/efi ] || [ "${NP_SKIP_EFI_CHECK:-}" = 1 ] || \
+    fail "Dieser PC ist nicht im UEFI-Modus gestartet. Bitte im BIOS den UEFI-Modus aktivieren und den USB-Stick erneut starten."
+[ -f "$PKGLIST" ] || fail "Paketliste $PKGLIST fehlt."
+
+clear || true
+echo -e "${c_info}"
+cat <<'EOF'
+  _   _                 ____  _
+ | \ | | _____   ____ _|  _ \| | __ _ _   _
+ |  \| |/ _ \ \ / / _` | |_) | |/ _` | | | |
+ | |\  | (_) \ V / (_| |  __/| | (_| | |_| |
+ |_| \_|\___/ \_/ \__,_|_|   |_|\__,_|\__, |
+                 OS – Installation     |___/
+EOF
+echo -e "${c_off}"
+
+info "Prüfe Internetverbindung ..."
+curl -fsI --max-time 15 https://archlinux.org &>/dev/null || ping -c1 -W5 archlinux.org &>/dev/null || \
+    fail "Keine Internetverbindung. Bitte oben rechts in der Taskleiste mit LAN/WLAN verbinden und erneut starten."
+ok "Internet ist verbunden."
+
+# ---------------------------------------------------------------------
+# 2) Festplatte auswählen
+# ---------------------------------------------------------------------
+LIVE_DEV=$(findmnt -no SOURCE /run/archiso/bootmnt 2>/dev/null | sed -E 's/p?[0-9]+$//' || true)
+if [ -z "${NP_DISK:-}" ]; then
+    echo
+    info "Gefundene Festplatten:"
+    lsblk -dpno NAME,SIZE,MODEL,TYPE | awk '$NF=="disk"' | grep -v -e "/dev/loop" -e "/dev/zram" \
+        | { if [ -n "$LIVE_DEV" ]; then grep -v "^$LIVE_DEV "; else cat; fi; } | sed 's/ disk$//'
+    echo
+    NP_DISK=$(ask "Auf welche Festplatte soll NovaPlay? (z. B. /dev/nvme0n1 oder /dev/sda)" "")
+fi
+[ -b "$NP_DISK" ] || fail "\"$NP_DISK\" ist keine gültige Festplatte."
+[ "$NP_DISK" != "$LIVE_DEV" ] || fail "Das ist der USB-Stick, von dem gerade gestartet wurde."
+
+# ---------------------------------------------------------------------
+# 3) Benutzer & Einstellungen
+# ---------------------------------------------------------------------
+if [ -z "${NP_USER:-}" ]; then NP_USER=$(ask "Benutzername (klein, ohne Leerzeichen)" "gamer"); fi
+[[ "$NP_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || fail "Ungültiger Benutzername: nur Kleinbuchstaben, Zahlen, - und _."
+
+if [ -z "${NP_PASS:-}" ]; then
+    while true; do
+        read -r -s -p "Passwort für $NP_USER: " NP_PASS; echo
+        read -r -s -p "Passwort wiederholen: " p2; echo
+        [ -n "$NP_PASS" ] && [ "$NP_PASS" = "$p2" ] && break
+        echo "Passwörter sind leer oder stimmen nicht überein – nochmal."
+    done
+fi
+if [ -z "${NP_HOST:-}" ]; then NP_HOST=$(ask "Name des Computers" "novaplay"); fi
+[[ "$NP_HOST" =~ ^[a-zA-Z0-9-]{1,63}$ ]] || fail "Ungültiger Computername."
+if [ -z "${NP_AUTOLOGIN:-}" ]; then NP_AUTOLOGIN=$(ask "Automatisch anmelden (ohne Passwort beim Start)? j/n" "j"); fi
+if [ -z "${NP_CONSOLE:-}" ]; then NP_CONSOLE=$(ask "Direkt im Konsolen-Modus (Steam Big Picture) starten? j/n" "n"); fi
+
+GPU_NVIDIA=0
+for d in /sys/bus/pci/devices/*; do
+    [[ "$(cat "$d/class" 2>/dev/null)" == 0x03* ]] && [ "$(cat "$d/vendor")" = "0x10de" ] && GPU_NVIDIA=1
+done
+[ "${NP_FORCE_NVIDIA:-}" = 1 ] && GPU_NVIDIA=1
+
+echo
+info "Zusammenfassung:"
+echo "   Festplatte:      $NP_DISK  (wird KOMPLETT gelöscht!)"
+echo "   Benutzer:        $NP_USER"
+echo "   Computername:    $NP_HOST"
+echo "   Auto-Anmeldung:  $NP_AUTOLOGIN"
+echo "   Konsolen-Modus:  $NP_CONSOLE"
+echo "   NVIDIA-Treiber:  $([ $GPU_NVIDIA = 1 ] && echo ja || echo nein, nicht nötig)"
+echo
+if [ "${NP_YES:-}" != 1 ]; then
+    confirm=$(ask "Zum Starten bitte JA (in Großbuchstaben) eintippen" "")
+    [ "$confirm" = "JA" ] || fail "Abgebrochen – es wurde nichts verändert."
+fi
+
+exec > >(tee -a "$LOG") 2>&1
+
+# ---------------------------------------------------------------------
+# 4) Festplatte aufteilen und formatieren
+# ---------------------------------------------------------------------
+info "Teile Festplatte auf ..."
+umount -R "$TARGET" 2>/dev/null || true
+swapoff -a 2>/dev/null || true
+wipefs -af "$NP_DISK"
+sgdisk --zap-all "$NP_DISK"
+sgdisk -n1:0:+1G -t1:ef00 -c1:"EFI" -n2:0:0 -t2:8304 -c2:"NovaPlay" "$NP_DISK"
+partprobe "$NP_DISK" 2>/dev/null || true
+udevadm settle
+if [[ "$NP_DISK" =~ [0-9]$ ]]; then P="${NP_DISK}p"; else P="$NP_DISK"; fi
+ESP="${P}1"; ROOT="${P}2"
+for _ in $(seq 1 10); do [ -b "$ROOT" ] && break; sleep 1; done
+[ -b "$ROOT" ] || fail "Partition $ROOT wurde nicht gefunden."
+
+info "Formatiere ..."
+mkfs.fat -F32 -n EFI "$ESP"
+mkfs.ext4 -F -L NovaPlay "$ROOT"
+mkdir -p "$TARGET"
+mount "$ROOT" "$TARGET"
+mount --mkdir -o fmask=0077,dmask=0077 "$ESP" "$TARGET/boot"
+ok "Festplatte vorbereitet."
+
+# ---------------------------------------------------------------------
+# 5) Pakete installieren (lädt mehrere GB herunter)
+# ---------------------------------------------------------------------
+mapfile -t PKGS < <(grep -v -e '^#' -e '^[[:space:]]*$' "$PKGLIST")
+if [ $GPU_NVIDIA = 1 ]; then PKGS+=(nvidia-open nvidia-utils lib32-nvidia-utils nvidia-settings); fi
+
+info "Bereite Paket-Schlüssel vor ..."
+# Das Live-System richtet die Schlüssel normalerweise selbst ein (pacman-init),
+# wartet dafür aber auf die Zeitsynchronisation. Ist die blockiert, machen wir es hier.
+if ! systemctl is-active --quiet pacman-init.service; then
+    systemctl stop pacman-init.service 2>/dev/null || true
+    pacman-key --init
+    pacman-key --populate archlinux
+fi
+pacman -Sy --noconfirm --needed archlinux-keyring
+
+info "Suche schnelle Download-Server (max. 1 Minute) ..."
+timeout 60 reflector --latest 20 --protocol https --sort rate --save /etc/pacman.d/mirrorlist || \
+    echo "   (Server-Suche übersprungen – nutze Standardliste)"
+
+info "Installiere ${#PKGS[@]} Pakete – das dauert je nach Internet 10–40 Minuten ..."
+pacstrap -K "$TARGET" "${PKGS[@]}"
+genfstab -U "$TARGET" >> "$TARGET/etc/fstab"
+ok "Pakete installiert."
+
+# ---------------------------------------------------------------------
+# 6) NovaPlay-Einstellungen übernehmen
+# ---------------------------------------------------------------------
+info "Übernehme NovaPlay-Einstellungen ..."
+cp /etc/pacman.conf "$TARGET/etc/pacman.conf"
+cp /etc/pacman.d/mirrorlist "$TARGET/etc/pacman.d/mirrorlist"
+install -Dm644 /etc/sysctl.d/80-novaplay-gaming.conf   "$TARGET/etc/sysctl.d/80-novaplay-gaming.conf"
+install -Dm644 /etc/systemd/zram-generator.conf        "$TARGET/etc/systemd/zram-generator.conf"
+install -Dm644 /etc/environment.d/90-novaplay.conf     "$TARGET/etc/environment.d/90-novaplay.conf"
+install -Dm644 /etc/X11/xorg.conf.d/00-keyboard.conf   "$TARGET/etc/X11/xorg.conf.d/00-keyboard.conf"
+install -Dm755 /usr/local/bin/novaplay-steam-session   "$TARGET/usr/local/bin/novaplay-steam-session"
+install -Dm755 /usr/local/bin/novaplay-firstlogin      "$TARGET/usr/local/bin/novaplay-firstlogin"
+install -Dm644 /usr/share/wayland-sessions/novaplay-steam.desktop "$TARGET/usr/share/wayland-sessions/novaplay-steam.desktop"
+install -Dm644 /etc/xdg/autostart/novaplay-firstlogin.desktop     "$TARGET/etc/xdg/autostart/novaplay-firstlogin.desktop"
+mkdir -p "$TARGET/usr/share/wallpapers" "$TARGET/usr/share/plymouth/themes"
+cp -r /usr/share/wallpapers/novaplay-*.png           "$TARGET/usr/share/wallpapers/"
+cp -r /usr/share/plymouth/themes/novaplay             "$TARGET/usr/share/plymouth/themes/"
+install -Dm644 /etc/plymouth/plymouthd.conf            "$TARGET/etc/plymouth/plymouthd.conf"
+install -Dm644 /usr/share/sddm/themes/breeze/theme.conf.user "$TARGET/usr/share/sddm/themes/breeze/theme.conf.user"
+install -Dm644 /usr/share/novaplay/target/mkinitcpio-novaplay.conf "$TARGET/etc/mkinitcpio.conf.d/novaplay.conf"
+install -Dm644 /usr/share/novaplay/target/novaplay-firstboot.service "$TARGET/etc/systemd/system/novaplay-firstboot.service"
+install -Dm755 /usr/local/bin/novaplay-firstboot       "$TARGET/usr/local/bin/novaplay-firstboot"
+install -Dm755 /usr/local/bin/novaplay-center          "$TARGET/usr/local/bin/novaplay-center"
+install -Dm644 /usr/share/applications/novaplay-center.desktop "$TARGET/usr/share/applications/novaplay-center.desktop"
+install -Dm644 /etc/xdg/autostart/novaplay-center.desktop      "$TARGET/etc/xdg/autostart/novaplay-center.desktop"
+install -Dm644 /usr/share/novaplay/target/reflector.conf "$TARGET/etc/xdg/reflector/reflector.conf"
+install -Dm644 /usr/share/color-schemes/NovaPlay.colors "$TARGET/usr/share/color-schemes/NovaPlay.colors"
+install -Dm644 /usr/share/konsole/NovaPlay.colorscheme "$TARGET/usr/share/konsole/NovaPlay.colorscheme"
+install -Dm644 /usr/share/konsole/NovaPlay.profile     "$TARGET/usr/share/konsole/NovaPlay.profile"
+install -Dm644 /usr/share/novaplay/logo.txt            "$TARGET/usr/share/novaplay/logo.txt"
+install -Dm644 /etc/bash.bashrc                        "$TARGET/etc/bash.bashrc"
+install -Dm644 /etc/skel/.bashrc                       "$TARGET/etc/skel/.bashrc"
+install -Dm644 /etc/skel/.config/fastfetch/config.jsonc "$TARGET/etc/skel/.config/fastfetch/config.jsonc"
+install -Dm644 /etc/skel/.config/MangoHud/MangoHud.conf "$TARGET/etc/skel/.config/MangoHud/MangoHud.conf"
+cp /etc/locale.gen "$TARGET/etc/locale.gen"
+echo 'LANG=de_DE.UTF-8'  > "$TARGET/etc/locale.conf"
+echo 'KEYMAP=de-latin1'  > "$TARGET/etc/vconsole.conf"
+echo "$NP_HOST"          > "$TARGET/etc/hostname"
+cat > "$TARGET/etc/hosts" <<EOF
+127.0.0.1   localhost
+::1         localhost
+127.0.1.1   $NP_HOST
+EOF
+echo '%wheel ALL=(ALL:ALL) ALL' > "$TARGET/etc/sudoers.d/10-wheel"
+chmod 440 "$TARGET/etc/sudoers.d/10-wheel"
+
+mkdir -p "$TARGET/etc/sddm.conf.d"
+SESSION=plasma
+[[ "$NP_CONSOLE" =~ ^[jJyY] ]] && SESSION=novaplay-steam
+{
+    echo "[Theme]"; echo "Current=breeze"
+    if [[ "$NP_AUTOLOGIN" =~ ^[jJyY] ]]; then
+        echo; echo "[Autologin]"; echo "User=$NP_USER"; echo "Session=$SESSION"
+    fi
+} > "$TARGET/etc/sddm.conf.d/10-novaplay.conf"
+
+# ---------------------------------------------------------------------
+# 7) System im neuen System einrichten
+# ---------------------------------------------------------------------
+info "Richte System ein ..."
+arch-chroot "$TARGET" /bin/bash -e <<EOF
+ln -sf /usr/share/zoneinfo/Europe/Berlin /etc/localtime
+hwclock --systohc || true
+locale-gen
+useradd -m -G wheel,audio,video,input -s /bin/bash -c "NovaPlay Gamer" "$NP_USER"
+systemctl enable NetworkManager.service sddm.service bluetooth.service power-profiles-daemon.service fstrim.timer systemd-timesyncd.service
+systemctl enable ufw.service cups.service avahi-daemon.service cronie.service systemd-oomd.service paccache.timer reflector.timer novaplay-firstboot.service
+# Netzwerkdrucker automatisch finden (mDNS)
+sed -i 's/^hosts: mymachines resolve/hosts: mymachines mdns_minimal [NOTFOUND=return] resolve/' /etc/nsswitch.conf
+mkinitcpio -P
+EOF
+printf '%s:%s\n' "$NP_USER" "$NP_PASS" | arch-chroot "$TARGET" chpasswd
+
+# ---------------------------------------------------------------------
+# 8) Bootloader (systemd-boot)
+# ---------------------------------------------------------------------
+info "Installiere Bootloader ..."
+if [ -d /sys/firmware/efi/efivars ]; then
+    arch-chroot "$TARGET" bootctl install
+else
+    arch-chroot "$TARGET" bootctl install --no-variables
+fi
+ROOT_PARTUUID=$(blkid -s PARTUUID -o value "$ROOT")
+OPTS="root=PARTUUID=$ROOT_PARTUUID rw quiet splash loglevel=3 rd.udev.log_level=3 vt.global_cursor_default=0"
+[ $GPU_NVIDIA = 1 ] && OPTS="$OPTS nvidia-drm.modeset=1"
+cat > "$TARGET/boot/loader/loader.conf" <<EOF
+default novaplay.conf
+timeout 3
+console-mode max
+editor no
+EOF
+cat > "$TARGET/boot/loader/entries/novaplay.conf" <<EOF
+title   NovaPlay OS
+linux   /vmlinuz-linux
+initrd  /initramfs-linux.img
+options $OPTS
+EOF
+cat > "$TARGET/boot/loader/entries/novaplay-fallback.conf" <<EOF
+title   NovaPlay OS (Notfall-Modus)
+linux   /vmlinuz-linux
+initrd  /initramfs-linux-fallback.img
+options root=PARTUUID=$ROOT_PARTUUID rw
+EOF
+ok "Bootloader installiert."
+
+sync
+umount -R "$TARGET"
+echo
+ok "NovaPlay OS ist installiert! 🎮"
+echo "   USB-Stick abziehen und den PC neu starten:  reboot"

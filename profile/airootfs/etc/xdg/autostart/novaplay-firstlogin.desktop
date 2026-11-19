@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=NovaPlay Ersteinrichtung
+Exec=/usr/local/bin/novaplay-firstlogin
+OnlyShowIn=KDE;
+NoDisplay=true

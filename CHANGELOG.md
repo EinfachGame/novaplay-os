@@ -1,5 +1,12 @@
 # Neuerungen
 
+## 1.0.1 – November 2026
+
+**Fehlerbehebungen**
+- Sperrbildschirm: In virtuellen Maschinen (VMware, VirtualBox) blieb der Bildschirm nach der automatischen Sperre schwarz bzw. ohne Passwortfeld. Live-System sperrt jetzt nicht mehr automatisch und schaltet den Bildschirm nicht ab; das installierte System sperrt nicht mehr automatisch (manuell mit Win + L) und schaltet den Bildschirm erst nach 15 Minuten ab.
+- Kein automatischer Ruhezustand am Netzstrom mehr (lange Spiele-Downloads brechen nicht ab).
+- NovaPlay Center: Discord-Kachel zeigt jetzt ein Symbol, auch bevor Discord installiert ist.
+
 ## 1.0 – November 2026
 
 Erste öffentliche Version.

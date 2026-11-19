@@ -1,0 +1,4 @@
+# NovaPlay OS (Live-System): nicht automatisch sperren
+[Daemon]
+Autolock=false
+LockOnResume=false

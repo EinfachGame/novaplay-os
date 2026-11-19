@@ -1,0 +1,5 @@
+# NovaPlay OS: nicht automatisch sperren (manuell sperren mit Win + L).
+# Automatisches Sperren einschalten: Systemeinstellungen → Sicherheit & Datenschutz → Bildschirmsperre
+[Daemon]
+Autolock=false
+LockOnResume=true

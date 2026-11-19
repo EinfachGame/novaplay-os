@@ -183,6 +183,8 @@ install -Dm755 /usr/local/bin/novaplay-center          "$TARGET/usr/local/bin/no
 install -Dm644 /usr/share/applications/novaplay-center.desktop "$TARGET/usr/share/applications/novaplay-center.desktop"
 install -Dm644 /etc/xdg/autostart/novaplay-center.desktop      "$TARGET/etc/xdg/autostart/novaplay-center.desktop"
 install -Dm644 /usr/share/novaplay/target/reflector.conf "$TARGET/etc/xdg/reflector/reflector.conf"
+install -Dm644 /usr/share/novaplay/target/kscreenlockerrc "$TARGET/etc/xdg/kscreenlockerrc"
+install -Dm644 /usr/share/novaplay/target/powerdevilrc    "$TARGET/etc/xdg/powerdevilrc"
 install -Dm644 /usr/share/color-schemes/NovaPlay.colors "$TARGET/usr/share/color-schemes/NovaPlay.colors"
 install -Dm644 /usr/share/konsole/NovaPlay.colorscheme "$TARGET/usr/share/konsole/NovaPlay.colorscheme"
 install -Dm644 /usr/share/konsole/NovaPlay.profile     "$TARGET/usr/share/konsole/NovaPlay.profile"

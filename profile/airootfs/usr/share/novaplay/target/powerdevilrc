@@ -1,0 +1,8 @@
+# NovaPlay OS: Bildschirm nach 15 Minuten aus, am Netzstrom kein automatischer Ruhezustand
+# (sonst brechen lange Spiele-Downloads ab). Anpassen: Systemeinstellungen → Energieverwaltung
+[AC][Display]
+DimDisplayIdleTimeoutSec=600
+TurnOffDisplayIdleTimeoutSec=900
+
+[AC][SuspendAndShutdown]
+AutoSuspendAction=0

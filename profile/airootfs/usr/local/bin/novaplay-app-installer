@@ -1,0 +1,270 @@
+#!/usr/bin/env python3
+"""NovaPlay App-Installer – Programme aus dem Internet per Doppelklick installieren.
+
+Aufruf: novaplay-app-installer <datei>
+Erkennt die Datei und bietet den passenden Weg an:
+  .exe / .msi          → Windows-Programm mit Wine installieren
+  .AppImage            → in ~/Anwendungen ablegen + Startmenü-Eintrag
+  .flatpakref/.flatpak → über den App-Store (Discover) installieren
+  .deb / .rpm          → passendes Programm im App-Store suchen
+  .sh / .run           → Installationsskript im Terminal ausführen (nach Rückfrage)
+"""
+import os
+import re
+import shutil
+import stat
+import sys
+from pathlib import Path
+
+from PyQt6.QtCore import QProcess, Qt
+from PyQt6.QtGui import QIcon
+from PyQt6.QtWidgets import (
+    QApplication, QDialog, QFileDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
+)
+
+APPS_DIR = Path.home() / "Anwendungen"
+DESKTOP_DIR = Path.home() / ".local/share/applications"
+WINE_PREFIX = Path.home() / ".local/share/novaplay/wine"
+
+STYLE = """
+QWidget { background: #0c0818; color: #f0ebff; font-size: 11pt; }
+QLabel#title { font-size: 17pt; font-weight: bold; }
+QLabel#hint { color: #b8acd8; }
+QLabel#warn { color: #ffc850; }
+QPushButton { background: #1a1030; border: 2px solid #2e1d55; border-radius: 10px; padding: 9px 16px; }
+QPushButton:hover { border-color: #a855ff; }
+QPushButton#primary { background: #6d28d9; border-color: #a855ff; font-weight: bold; }
+"""
+
+
+# Bekannte Windows-Installer, für die es unter NovaPlay einen besseren Weg gibt:
+# Schlüsselwort im Dateinamen -> (Hinweis, Knopftext, Befehl)
+BETTER = [
+    ("steam", ("Steam ist bei NovaPlay schon installiert – als echte Linux-Version.",
+               "Steam öffnen", ["steam"])),
+    ("epic", ("Epic-Games-Spiele laufen bei NovaPlay über Heroic.",
+              "Heroic öffnen", ["flatpak", "run", "com.heroicgameslauncher.hgl"])),
+    ("gog", ("GOG-Spiele laufen bei NovaPlay über Heroic.",
+             "Heroic öffnen", ["flatpak", "run", "com.heroicgameslauncher.hgl"])),
+    ("discord", ("Discord gibt es bei NovaPlay als Linux-App.",
+                 "Discord öffnen", ["flatpak", "run", "com.discordapp.Discord"])),
+    ("battle.net", ("Battle.net installierst du am besten über Lutris (Suche „Battle.net“).",
+                    "Lutris öffnen", ["lutris"])),
+    ("minecraft", ("Minecraft läuft unter Linux nativ – am einfachsten mit dem Prism Launcher.",
+                   "Prism Launcher suchen", ["plasma-discover", "--search", "Prism Launcher"])),
+    ("spotify", ("Spotify gibt es als Linux-App im App-Store.",
+                 "Spotify suchen", ["plasma-discover", "--search", "Spotify"])),
+    ("obs", ("OBS Studio ist bei NovaPlay schon installiert.", "OBS öffnen", ["obs"])),
+    ("vlc", ("Videos spielst du mit Haruna ab – VLC gibt es auch im App-Store.",
+             "VLC suchen", ["plasma-discover", "--search", "VLC"])),
+]
+
+
+def better_way(path):
+    n = path.name.lower()
+    for key, val in BETTER:
+        if key in n:
+            return val
+    return None
+
+
+def kind_of(path):
+    n = path.name.lower()
+    if n.endswith((".exe", ".msi")):
+        return "windows"
+    if n.endswith(".appimage"):
+        return "appimage"
+    if n.endswith((".flatpakref", ".flatpakrepo", ".flatpak")):
+        return "flatpak"
+    if n.endswith((".deb", ".rpm")):
+        return "foreign"
+    if n.endswith((".sh", ".run")):
+        return "script"
+    return "unknown"
+
+
+def guess_name(path):
+    """Programmname aus dem Dateinamen raten (z. B. 'Discord-0.0.70.deb' -> 'Discord')."""
+    base = re.sub(r"\.(exe|msi|appimage|deb|rpm|sh|run|flatpakref|flatpak)$", "", path.name, flags=re.I)
+    base = re.split(r"[-_ ](v?\d|setup|installer|x86|amd64|linux|win|portable)", base, maxsplit=1, flags=re.I)[0]
+    return base.replace(".", " ").strip() or path.stem
+
+
+class Dialog(QDialog):
+    def __init__(self, path):
+        super().__init__()
+        self.path = path
+        self.setWindowTitle("NovaPlay App-Installer")
+        self.setWindowIcon(QIcon.fromTheme("system-software-install"))
+        self.setMinimumWidth(620)
+        self.v = QVBoxLayout(self)
+        self.v.setContentsMargins(26, 22, 26, 18)
+        self.v.setSpacing(12)
+        self.title = self.text("", "title")
+        self.info = self.text("", "hint")
+        self.status = self.text("", "warn")
+        self.row = QHBoxLayout()
+        self.row.addStretch()
+        self.v.addLayout(self.row)
+        getattr(self, "setup_" + kind_of(path))()
+
+    def text(self, t, name):
+        lbl = QLabel(t)
+        lbl.setWordWrap(True)
+        lbl.setObjectName(name)
+        self.v.addWidget(lbl)
+        return lbl
+
+    def button(self, text, func, primary=False):
+        b = QPushButton(text)
+        if primary:
+            b.setObjectName("primary")
+        b.clicked.connect(func)
+        self.row.addWidget(b)
+        return b
+
+    def done_msg(self, msg):
+        self.status.setText(msg)
+        for i in range(self.row.count()):
+            w = self.row.itemAt(i).widget()
+            if w:
+                w.hide()
+        self.button("Schließen", self.accept, primary=True)
+
+    # ---------------------------------------------------------- Windows
+    def setup_windows(self):
+        self.title.setText(f"Windows-Programm „{self.path.name}“")
+        self.info.setText(
+            "NovaPlay kann viele Windows-Programme mit <b>Wine</b> installieren. Nach der Installation "
+            "findest du das Programm im Startmenü (unter „Wine“).<br><br>"
+            "Tipp für <b>Spiele</b>: Besser über Steam („Nicht-Steam-Spiel hinzufügen“), Heroic oder "
+            "Lutris installieren – dort laufen sie meist besser.")
+        better = better_way(self.path)
+        self.button("Abbrechen", self.reject)
+        if better:
+            hint, btn, cmd = better
+            self.status.setText("💡 " + hint)
+            self.button(btn, lambda: (QProcess.startDetached(cmd[0], cmd[1:]), self.accept()), primary=True)
+            self.button("Trotzdem mit Wine installieren", self.run_wine)
+        else:
+            self.button("Mit Wine installieren", self.run_wine, primary=True)
+
+    def run_wine(self):
+        WINE_PREFIX.mkdir(parents=True, exist_ok=True)
+        env = ["env", f"WINEPREFIX={WINE_PREFIX}"]
+        if self.path.name.lower().endswith(".msi"):
+            ok = QProcess.startDetached(env[0], env[1:] + ["wine", "msiexec", "/i", str(self.path)])
+        else:
+            ok = QProcess.startDetached(env[0], env[1:] + ["wine", str(self.path)])
+        self.done_msg("Das Installationsprogramm startet gleich (beim ersten Mal kann das eine Minute dauern)."
+                      if ok else "Wine konnte nicht gestartet werden.")
+
+    # ---------------------------------------------------------- AppImage
+    def setup_appimage(self):
+        self.title.setText(f"App „{guess_name(self.path)}“ (AppImage)")
+        self.info.setText(
+            "Ein AppImage ist ein fertiges Programm in einer Datei. NovaPlay legt es in deinen Ordner "
+            f"„Anwendungen“ und erstellt einen Eintrag im Startmenü.")
+        self.button("Abbrechen", self.reject)
+        self.button("Installieren", self.install_appimage, primary=True)
+
+    def install_appimage(self):
+        APPS_DIR.mkdir(parents=True, exist_ok=True)
+        DESKTOP_DIR.mkdir(parents=True, exist_ok=True)
+        target = APPS_DIR / self.path.name
+        if self.path.resolve() != target.resolve():
+            shutil.copy2(self.path, target)
+        target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        name = guess_name(self.path)
+        slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "app"
+        desktop = DESKTOP_DIR / f"novaplay-appimage-{slug}.desktop"
+        desktop.write_text(
+            "[Desktop Entry]\nType=Application\n"
+            f"Name={name}\nExec=\"{target}\" %U\nIcon=application-x-executable\n"
+            "Categories=Utility;\nComment=Installiert mit dem NovaPlay App-Installer\n")
+        self.done_msg(f"✔ „{name}“ ist installiert und im Startmenü zu finden.")
+        start = QPushButton("Jetzt starten")
+        start.clicked.connect(lambda: (QProcess.startDetached(str(target), []), self.accept()))
+        self.row.insertWidget(0, start)
+
+    # ---------------------------------------------------------- Flatpak
+    def setup_flatpak(self):
+        self.title.setText(f"App „{guess_name(self.path)}“ (Flatpak)")
+        self.info.setText("Diese Datei wird über den App-Store (Discover) installiert. "
+                          "Dort bestätigst du die Installation mit einem Klick.")
+        self.button("Abbrechen", self.reject)
+        self.button("Im App-Store öffnen", self.open_discover_file, primary=True)
+
+    def open_discover_file(self):
+        QProcess.startDetached("plasma-discover", ["--local-filename", str(self.path)])
+        self.accept()
+
+    # ---------------------------------------------------------- .deb / .rpm
+    def setup_foreign(self):
+        name = guess_name(self.path)
+        sys_name = "Ubuntu/Debian" if self.path.name.lower().endswith(".deb") else "Fedora/openSUSE"
+        self.title.setText(f"„{self.path.name}“ ist für {sys_name}")
+        self.info.setText(
+            f"Diese Datei ist für ein anderes Linux gedacht und lässt sich auf NovaPlay nicht direkt "
+            f"installieren. Fast alle Programme gibt es aber im App-Store – NovaPlay sucht dort nach "
+            f"„{name}“.")
+        self.button("Abbrechen", self.reject)
+        self.button(f"„{name}“ im App-Store suchen",
+                    lambda: (QProcess.startDetached("plasma-discover", ["--search", name]), self.accept()),
+                    primary=True)
+
+    # ---------------------------------------------------------- Skripte
+    def setup_script(self):
+        self.title.setText(f"Installationsskript „{self.path.name}“")
+        self.info.setText(
+            "Manche Programme und Spiele (z. B. von GOG) kommen als Linux-Installationsskript. "
+            "Es wird in einem Terminal-Fenster ausgeführt, damit du alles siehst.")
+        self.status.setText("⚠ Führe nur Skripte von Seiten aus, denen du vertraust.")
+        self.button("Abbrechen", self.reject)
+        self.button("Ausführen", self.run_script, primary=True)
+
+    def run_script(self):
+        self.path.chmod(self.path.stat().st_mode | stat.S_IXUSR)
+        QProcess.startDetached("konsole", ["--hold", "-e", str(self.path)])
+        self.accept()
+
+    # ---------------------------------------------------------- unbekannt
+    def setup_unknown(self):
+        self.title.setText(f"„{self.path.name}“")
+        self.info.setText("Diese Datei ist kein bekanntes Installationsformat. Im App-Store findest du "
+                          "fast jedes Programm – einfach nach dem Namen suchen.")
+        self.button("Schließen", self.reject)
+        self.button("App-Store öffnen", lambda: (QProcess.startDetached("plasma-discover", []), self.accept()),
+                    primary=True)
+
+
+def main():
+    app = QApplication(sys.argv)
+    app.setApplicationName("NovaPlay App-Installer")
+    app.setDesktopFileName("novaplay-app-installer")
+    paths = QIcon.themeSearchPaths()
+    if "/usr/share/icons" not in paths:
+        QIcon.setThemeSearchPaths(paths + ["/usr/share/icons"])
+    if not QIcon.themeName():
+        QIcon.setThemeName("Papirus-Dark")
+    app.setStyleSheet(STYLE)
+    args = [a for a in sys.argv[1:] if not a.startswith("-")]
+    if args:
+        p = args[0]
+        if p.startswith("file://"):
+            from urllib.parse import unquote, urlparse
+            p = unquote(urlparse(p).path)
+    else:
+        p, _ = QFileDialog.getOpenFileName(None, "Programm-Datei wählen", str(Path.home() / "Downloads"))
+        if not p:
+            return 0
+    path = Path(p)
+    if not path.is_file():
+        print(f"Datei nicht gefunden: {p}")
+        return 1
+    d = Dialog(path)
+    return 0 if d.exec() else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

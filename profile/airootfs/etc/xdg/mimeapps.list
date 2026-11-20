@@ -1,0 +1,13 @@
+# NovaPlay OS: heruntergeladene Programme öffnen mit dem NovaPlay App-Installer
+[Default Applications]
+application/x-ms-dos-executable=novaplay-app-installer.desktop
+application/x-msdownload=novaplay-app-installer.desktop
+application/vnd.microsoft.portable-executable=novaplay-app-installer.desktop
+application/x-msi=novaplay-app-installer.desktop
+application/vnd.appimage=novaplay-app-installer.desktop
+application/x-iso9660-appimage=novaplay-app-installer.desktop
+application/vnd.flatpak.ref=novaplay-app-installer.desktop
+application/vnd.flatpak.repo=novaplay-app-installer.desktop
+application/vnd.flatpak=novaplay-app-installer.desktop
+application/vnd.debian.binary-package=novaplay-app-installer.desktop
+application/x-rpm=novaplay-app-installer.desktop

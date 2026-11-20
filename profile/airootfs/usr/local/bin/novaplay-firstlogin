@@ -31,6 +31,8 @@ mkdir -p "$DESK"
 for app in /usr/share/applications/steam.desktop \
            /usr/share/applications/net.lutris.Lutris.desktop \
            /usr/share/applications/novaplay-center.desktop \
+           /usr/share/applications/novaplay-games.desktop \
+           /usr/share/applications/novaplay-settings.desktop \
            /var/lib/flatpak/exports/share/applications/com.discordapp.Discord.desktop \
            /var/lib/flatpak/exports/share/applications/com.heroicgameslauncher.hgl.desktop \
            /var/lib/flatpak/exports/share/applications/net.davidotek.pupgui2.desktop; do

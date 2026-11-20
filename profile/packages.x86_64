@@ -264,3 +264,26 @@ plasma-browser-integration
 kwalletmanager
 kinfocenter
 kde-cli-tools
+python-vdf
+# Windows-ähnliche Apps (Paint, Uhr, Wetter, Kamera, Musik, Mail, Spiele …)
+kolourpaint
+kclock
+kweather
+kamoso
+elisa
+kdenlive
+krita
+kcharselect
+krdc
+thunderbird
+thunderbird-i18n-de
+krecorder
+kpat
+kmines
+kmahjongg
+ksudoku
+skanpage
+kalk
+kimageannotator
+fuse2
+polkit-kde-agent

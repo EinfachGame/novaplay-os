@@ -1,0 +1,544 @@
+#!/usr/bin/env python3
+"""NovaPlay Installer – grafische Installation von NovaPlay OS.
+
+Führt den Nutzer in wenigen Schritten durch die Installation und startet dann
+im Hintergrund /usr/local/bin/novaplay-install (ohne Rückfragen).
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+import unicodedata
+from pathlib import Path
+
+from PyQt6.QtCore import QProcess, Qt, QTimer
+from PyQt6.QtGui import QIcon, QPixmap
+from PyQt6.QtWidgets import (
+    QApplication, QButtonGroup, QCheckBox, QFormLayout, QHBoxLayout, QLabel,
+    QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
+    QRadioButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget,
+)
+
+BACKEND = "/usr/local/bin/novaplay-install"
+LOGO = "/usr/share/plymouth/themes/novaplay/watermark.png"
+USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+HOST_RE = re.compile(r"^[a-zA-Z0-9-]{1,63}$")
+MIN_DISK = 40 * 1000**3  # 40 GB
+
+# Fortschritt: Phase -> (Start %, Ende %)
+PHASES = {
+    "partition": (0, 5, "Festplatte wird vorbereitet ..."),
+    "keyring": (5, 9, "Sicherheitsschlüssel werden vorbereitet ..."),
+    "mirrors": (9, 12, "Schnellste Download-Server werden gesucht ..."),
+    "packages": (12, 86, "Programme werden heruntergeladen und installiert ..."),
+    "config": (86, 89, "NovaPlay-Einstellungen werden übernommen ..."),
+    "system": (89, 96, "System wird eingerichtet ..."),
+    "bootloader": (96, 99, "Startprogramm wird installiert ..."),
+    "finished": (100, 100, "Fertig!"),
+}
+
+STYLE = """
+QWidget { background: #0c0818; color: #f0ebff; font-size: 11pt; }
+QLabel#title { font-size: 20pt; font-weight: bold; }
+QLabel#hint { color: #b8acd8; }
+QLabel#warn { color: #ff7aa2; font-weight: bold; }
+QLabel#ok { color: #3cf0a0; font-weight: bold; }
+QLineEdit { background: #1a1030; border: 2px solid #2e1d55; border-radius: 8px; padding: 6px; }
+QLineEdit:focus { border-color: #a855ff; }
+QPushButton { background: #1a1030; border: 2px solid #2e1d55; border-radius: 10px; padding: 8px 18px; }
+QPushButton:hover { border-color: #a855ff; }
+QPushButton:disabled { color: #6c5f8f; border-color: #1f1638; }
+QPushButton#primary { background: #6d28d9; border-color: #a855ff; font-weight: bold; }
+QPushButton#primary:hover { background: #7c3aed; }
+QPushButton#primary:disabled { background: #2a1d45; }
+QRadioButton#disk { background: #1a1030; border: 2px solid #2e1d55; border-radius: 12px; padding: 14px; }
+QRadioButton#disk:checked { border-color: #00dcff; background: #0f2236; }
+QProgressBar { background: #1a1030; border: 2px solid #2e1d55; border-radius: 10px; height: 26px; text-align: center; }
+QProgressBar::chunk { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #a855ff, stop:1 #00dcff); border-radius: 8px; }
+QPlainTextEdit { background: #05030c; color: #b8acd8; font-family: monospace; font-size: 9pt; border-radius: 8px; }
+QCheckBox { spacing: 8px; }
+QCheckBox::indicator, QRadioButton::indicator { width: 18px; height: 18px; border: 2px solid #a855ff; background: #1a1030; }
+QCheckBox::indicator { border-radius: 4px; }
+QRadioButton::indicator { border-radius: 10px; }
+QCheckBox::indicator:checked, QRadioButton::indicator:checked { background: #00dcff; border-color: #00dcff; }
+"""
+
+
+def label(text, name=None, wrap=True):
+    lbl = QLabel(text)
+    lbl.setWordWrap(wrap)
+    if name:
+        lbl.setObjectName(name)
+    return lbl
+
+
+def human_size(b):
+    return f"{b / 1000**3:.0f} GB"
+
+
+def username_from(name):
+    s = unicodedata.normalize("NFKD", name.lower())
+    s = s.replace("ß", "ss")
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = re.sub(r"[^a-z0-9_-]", "", s.replace(" ", ""))
+    if not s or not re.match(r"[a-z_]", s[0]):
+        s = "gamer" + s
+    return s[:32]
+
+
+def live_device():
+    try:
+        src = subprocess.run(["findmnt", "-no", "SOURCE", "/run/archiso/bootmnt"],
+                             capture_output=True, text=True).stdout.strip()
+        if not src:
+            return ""
+        parent = subprocess.run(["lsblk", "-no", "PKNAME", src],
+                                capture_output=True, text=True).stdout.strip()
+        return "/dev/" + parent if parent else src
+    except OSError:
+        return ""
+
+
+def list_disks():
+    out = subprocess.run(["lsblk", "-J", "-b", "-d", "-o", "PATH,SIZE,MODEL,TYPE,TRAN,RM"],
+                         capture_output=True, text=True).stdout
+    live = live_device()
+    disks = []
+    for d in json.loads(out or '{"blockdevices": []}').get("blockdevices", []):
+        if d.get("type") != "disk" or d["path"].startswith(("/dev/loop", "/dev/zram", "/dev/sr")):
+            continue
+        if live and d["path"] == live:
+            continue
+        disks.append(d)
+    return disks
+
+
+class Page(QWidget):
+    def __init__(self, title, subtitle=""):
+        super().__init__()
+        self.lay = QVBoxLayout(self)
+        self.lay.setContentsMargins(40, 20, 40, 10)
+        self.lay.setSpacing(12)
+        self.lay.addWidget(label(title, "title"))
+        if subtitle:
+            self.lay.addWidget(label(subtitle, "hint"))
+
+    def can_continue(self):
+        return True
+
+
+class WelcomePage(Page):
+    def __init__(self, wiz):
+        super().__init__("Willkommen bei NovaPlay OS",
+                         "In wenigen Schritten ist NovaPlay fest auf deinem PC installiert.")
+        self.wiz = wiz
+        logo = QLabel()
+        if os.path.exists(LOGO):
+            logo.setPixmap(QPixmap(LOGO).scaledToHeight(200, Qt.TransformationMode.SmoothTransformation))
+        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lay.addWidget(logo)
+        self.status = label("Prüfe Internetverbindung ...", "hint")
+        self.lay.addWidget(self.status)
+        row = QHBoxLayout()
+        self.btn_net = QPushButton("Netzwerk einrichten")
+        self.btn_net.clicked.connect(lambda: QProcess.startDetached("kcmshell6", ["kcm_networkmanagement"]))
+        self.btn_retry = QPushButton("Erneut prüfen")
+        self.btn_retry.clicked.connect(self.check)
+        row.addWidget(self.btn_net)
+        row.addWidget(self.btn_retry)
+        row.addStretch()
+        self.lay.addLayout(row)
+        self.lay.addStretch()
+        self.online = False
+        self.uefi = Path("/sys/firmware/efi").exists() or os.environ.get("NP_SKIP_EFI_CHECK") == "1"
+        self.proc = None
+        QTimer.singleShot(200, self.check)
+
+    def check(self):
+        if not self.uefi:
+            self.status.setObjectName("warn")
+            self.status.setText("Dieser PC ist nicht im UEFI-Modus gestartet. Bitte im BIOS „UEFI“ "
+                                "einschalten und den USB-Stick neu starten.")
+            self.status.setStyleSheet("")
+            return
+        self.status.setObjectName("hint")
+        self.status.setStyleSheet("")
+        self.status.setText("Prüfe Internetverbindung ...")
+        self.proc = QProcess(self)
+        self.proc.finished.connect(self.checked)
+        self.proc.start("curl", ["-fsI", "--max-time", "10", "https://archlinux.org"])
+
+    def checked(self, code, _status):
+        self.online = code == 0
+        if self.online:
+            self.status.setObjectName("ok")
+            self.status.setText("✔ Internet ist verbunden. Klicke auf „Weiter“.")
+        else:
+            self.status.setObjectName("warn")
+            self.status.setText("Keine Internetverbindung. Bitte mit LAN oder WLAN verbinden "
+                                "(Knopf „Netzwerk einrichten“) und dann „Erneut prüfen“.")
+        self.status.setStyleSheet("")
+        self.wiz.update_buttons()
+
+    def can_continue(self):
+        return self.uefi and self.online
+
+
+class DiskPage(Page):
+    def __init__(self, wiz):
+        super().__init__("Wohin soll NovaPlay?",
+                         "Wähle die Festplatte aus. Alles, was darauf ist, wird gelöscht.")
+        self.wiz = wiz
+        self.group = QButtonGroup(self)
+        self.group.buttonToggled.connect(lambda *_: wiz.update_buttons())
+        self.box = QVBoxLayout()
+        self.lay.addLayout(self.box)
+        self.empty = label("", "warn")
+        self.lay.addWidget(self.empty)
+        refresh = QPushButton("Liste aktualisieren")
+        refresh.clicked.connect(self.refresh)
+        self.lay.addWidget(refresh, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.lay.addStretch()
+        self.refresh()
+
+    def refresh(self):
+        for b in self.group.buttons():
+            self.group.removeButton(b)
+            b.deleteLater()
+        disks = list_disks()
+        for d in disks:
+            kind = {"nvme": "NVMe-SSD", "sata": "SATA", "usb": "USB"}.get((d.get("tran") or "").lower(), "Festplatte")
+            model = (d.get("model") or "").strip() or "Unbekanntes Modell"
+            small = int(d["size"]) < MIN_DISK
+            text = f"{model}\n{human_size(int(d['size']))} · {kind} · {d['path']}"
+            if small:
+                text += "\nZu klein – mindestens 40 GB nötig"
+            rb = QRadioButton(text)
+            rb.setObjectName("disk")
+            rb.setProperty("path", d["path"])
+            rb.setProperty("label", f"{model} ({human_size(int(d['size']))})")
+            rb.setEnabled(not small)
+            self.group.addButton(rb)
+            self.box.addWidget(rb)
+        usable = [b for b in self.group.buttons() if b.isEnabled()]
+        if len(usable) == 1:  # nur eine passende Festplatte -> vorauswählen
+            usable[0].setChecked(True)
+        self.empty.setText("" if disks else "Keine passende Festplatte gefunden.")
+        self.wiz.update_buttons()
+
+    def selected(self):
+        b = self.group.checkedButton()
+        return (b.property("path"), b.property("label")) if b else (None, None)
+
+    def can_continue(self):
+        return self.group.checkedButton() is not None
+
+
+class UserPage(Page):
+    def __init__(self, wiz):
+        super().__init__("Dein Konto", "Damit meldest du dich bei NovaPlay an.")
+        self.wiz = wiz
+        form = QFormLayout()
+        form.setVerticalSpacing(10)
+        self.name = QLineEdit()
+        self.name.setPlaceholderText("z. B. Nils")
+        self.user = QLineEdit()
+        self.user.setPlaceholderText("wird automatisch ausgefüllt")
+        self.pw1 = QLineEdit()
+        self.pw1.setEchoMode(QLineEdit.EchoMode.Password)
+        self.pw2 = QLineEdit()
+        self.pw2.setEchoMode(QLineEdit.EchoMode.Password)
+        self.host = QLineEdit("novaplay")
+        form.addRow("Dein Name:", self.name)
+        form.addRow("Benutzername:", self.user)
+        form.addRow("Passwort:", self.pw1)
+        form.addRow("Passwort wiederholen:", self.pw2)
+        form.addRow("Name des PCs:", self.host)
+        self.lay.addLayout(form)
+        self.autologin = QCheckBox("Automatisch anmelden (ohne Passwort beim Start)")
+        self.autologin.setChecked(True)
+        self.console = QCheckBox("Direkt im Konsolen-Modus starten (Steam im Vollbild)")
+        self.lay.addWidget(self.autologin)
+        self.lay.addWidget(self.console)
+        self.msg = label("", "warn")
+        self.lay.addWidget(self.msg)
+        self.lay.addStretch()
+        self.user_edited = False
+        self.name.textChanged.connect(self.name_changed)
+        self.user.textEdited.connect(self.user_typed)
+        for w in (self.user, self.pw1, self.pw2, self.host):
+            w.textChanged.connect(lambda *_: wiz.update_buttons())
+
+    def name_changed(self, text):
+        if not self.user_edited:
+            self.user.setText(username_from(text) if text.strip() else "")
+
+    def user_typed(self, _text):
+        self.user_edited = True
+
+    def problem(self):
+        if not USER_RE.match(self.user.text()):
+            return "Benutzername: nur Kleinbuchstaben, Zahlen, - und _ (ohne Leerzeichen)."
+        if self.user.text() == "root":
+            return "Der Benutzername „root“ ist nicht erlaubt."
+        if len(self.pw1.text()) < 4:
+            return "Das Passwort muss mindestens 4 Zeichen haben."
+        if self.pw1.text() != self.pw2.text():
+            return "Die Passwörter stimmen nicht überein."
+        if "\n" in self.pw1.text():
+            return "Das Passwort darf keinen Zeilenumbruch enthalten."
+        if not HOST_RE.match(self.host.text()):
+            return "Name des PCs: nur Buchstaben, Zahlen und -."
+        return ""
+
+    def can_continue(self):
+        p = self.problem()
+        typed = bool(self.user.text() or self.pw1.text())
+        self.msg.setText(p if typed else "")
+        return not p
+
+
+class SummaryPage(Page):
+    def __init__(self, wiz):
+        super().__init__("Bereit zur Installation", "Bitte prüfe deine Angaben.")
+        self.wiz = wiz
+        self.text = label("")
+        self.lay.addWidget(self.text)
+        self.warn = label("", "warn")
+        self.lay.addWidget(self.warn)
+        self.confirm = QCheckBox("&Ja, alle Daten auf dieser Festplatte dürfen gelöscht werden.")
+        self.confirm.toggled.connect(lambda *_: wiz.update_buttons())
+        self.lay.addWidget(self.confirm)
+        self.lay.addStretch()
+
+    def fill(self):
+        path, lbl = self.wiz.disk.selected()
+        u = self.wiz.userp
+        self.text.setText(
+            f"<b>Festplatte:</b> {lbl} – {path}<br>"
+            f"<b>Benutzer:</b> {u.user.text()}<br>"
+            f"<b>Name des PCs:</b> {u.host.text()}<br>"
+            f"<b>Automatisch anmelden:</b> {'ja' if u.autologin.isChecked() else 'nein'}<br>"
+            f"<b>Start im Konsolen-Modus:</b> {'ja' if u.console.isChecked() else 'nein'}<br><br>"
+            "Die Installation lädt die neuesten Programme herunter (ca. 3 GB) und dauert "
+            "je nach Internet 10–40 Minuten."
+        )
+        self.warn.setText(f"⚠ Alle Daten auf {lbl} werden unwiderruflich gelöscht!")
+        self.confirm.setChecked(False)
+
+    def can_continue(self):
+        return self.confirm.isChecked()
+
+
+class ProgressPage(Page):
+    def __init__(self, wiz):
+        super().__init__("NovaPlay wird installiert ...",
+                         "Bitte schalte den PC in dieser Zeit nicht aus. Lehn dich zurück! 🎮")
+        self.wiz = wiz
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 100)
+        self.lay.addWidget(self.bar)
+        self.step = label("Starte ...")
+        self.lay.addWidget(self.step)
+        self.detail_btn = QPushButton("Details anzeigen")
+        self.detail_btn.setCheckable(True)
+        self.lay.addWidget(self.detail_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.log = QPlainTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setMaximumBlockCount(4000)
+        self.log.hide()
+        self.detail_btn.toggled.connect(self.log.setVisible)
+        self.detail_btn.toggled.connect(
+            lambda on: self.detail_btn.setText("Details ausblenden" if on else "Details anzeigen"))
+        self.lay.addWidget(self.log, 1)
+        self.lay.addStretch()
+        self.proc = None
+        self.phase = None
+        self.buf = ""
+        self.pkg_re = re.compile(r"\(\s*(\d+)/(\d+)\)\s+(installing|wird installiert|installiere|reinstalling|reinstalliere)\s+(\S+)", re.IGNORECASE)
+
+    def start(self):
+        path, _ = self.wiz.disk.selected()
+        u = self.wiz.userp
+        env_args = [
+            f"NP_DISK={path}", f"NP_USER={u.user.text()}", f"NP_HOST={u.host.text()}",
+            f"NP_AUTOLOGIN={'j' if u.autologin.isChecked() else 'n'}",
+            f"NP_CONSOLE={'j' if u.console.isChecked() else 'n'}",
+            "NP_YES=1", "NP_PASS_STDIN=1", "TERM=dumb", "LC_MESSAGES=C",  # englische pacman-Zeilen -> Fortschritt sicher erkennbar
+        ]
+        if os.environ.get("NP_SKIP_EFI_CHECK") == "1":
+            env_args.append("NP_SKIP_EFI_CHECK=1")
+        self.proc = QProcess(self)
+        self.proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        self.proc.readyReadStandardOutput.connect(self.read)
+        self.proc.finished.connect(self.finished)
+        if os.geteuid() == 0:
+            self.proc.start("env", env_args + [BACKEND])
+        else:
+            self.proc.start("sudo", ["-n", "env"] + env_args + [BACKEND])
+        self.proc.write((u.pw1.text() + "\n").encode())
+        self.proc.closeWriteChannel()
+
+    def read(self):
+        self.buf += bytes(self.proc.readAllStandardOutput()).decode(errors="replace")
+        *lines, self.buf = re.split(r"[\r\n]", self.buf)
+        for line in lines:
+            clean = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", line).rstrip()
+            if not clean:
+                continue
+            if clean.startswith("##PHASE:"):
+                self.set_phase(clean.split(":", 1)[1].strip())
+                continue
+            self.log.appendPlainText(clean)
+            m = self.pkg_re.search(clean)
+            if m and self.phase == "packages":
+                n, total = int(m.group(1)), int(m.group(2))
+                a, b, _ = PHASES["packages"]
+                self.bar.setValue(int(a + (b - a) * n / max(total, 1)))
+                self.step.setText(f"Installiere Programme ({n} von {total}): {m.group(4)}")
+
+    def set_phase(self, ph):
+        if ph not in PHASES:
+            return
+        self.phase = ph
+        a, _, text = PHASES[ph]
+        self.bar.setValue(a)
+        self.step.setText(text)
+
+    def finished(self, code, _status):
+        self.wiz.installing = False
+        if code == 0 and self.phase == "finished":
+            self.bar.setValue(100)
+            self.wiz.go_done()
+        else:
+            self.step.setObjectName("warn")
+            self.step.setStyleSheet("")
+            self.step.setText("Die Installation ist fehlgeschlagen. Unter „Details“ steht, was "
+                              "passiert ist. Du kannst es mit „Zurück“ erneut versuchen.")
+            self.detail_btn.setChecked(True)
+            self.wiz.update_buttons()
+
+
+class DonePage(Page):
+    def __init__(self, wiz):
+        super().__init__("NovaPlay OS ist installiert! 🎉",
+                         "Zieh jetzt den USB-Stick ab (bzw. wirf in der virtuellen Maschine das ISO aus) "
+                         "und starte neu. Beim ersten Start lädt NovaPlay noch Heroic, ProtonUp-Qt, "
+                         "Discord und GE-Proton im Hintergrund nach.")
+        logo = QLabel()
+        if os.path.exists(LOGO):
+            logo.setPixmap(QPixmap(LOGO).scaledToHeight(180, Qt.TransformationMode.SmoothTransformation))
+        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lay.addWidget(logo)
+        btn = QPushButton("Jetzt &neu starten")
+        btn.setObjectName("primary")
+        btn.clicked.connect(lambda: QProcess.startDetached("systemctl", ["reboot"]))
+        self.lay.addWidget(btn, alignment=Qt.AlignmentFlag.AlignCenter)
+        self.lay.addStretch()
+
+
+class Wizard(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("NovaPlay installieren")
+        self.setWindowIcon(QIcon.fromTheme("system-software-install"))
+        self.resize(820, 640)
+        self.installing = False
+        root = QVBoxLayout(self)
+        self.stack = QStackedWidget()
+        self.welcome = WelcomePage(self)
+        self.disk = DiskPage(self)
+        self.userp = UserPage(self)
+        self.summary = SummaryPage(self)
+        self.progress = ProgressPage(self)
+        self.done = DonePage(self)
+        for p in (self.welcome, self.disk, self.userp, self.summary, self.progress, self.done):
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+            scroll.setWidget(p)
+            self.stack.addWidget(scroll)
+        root.addWidget(self.stack, 1)
+        nav = QHBoxLayout()
+        self.steps = label("", "hint", wrap=False)
+        nav.addWidget(self.steps)
+        nav.addStretch()
+        self.back = QPushButton("&Zurück")
+        self.next = QPushButton("&Weiter")
+        self.next.setObjectName("primary")
+        self.back.clicked.connect(self.go_back)
+        self.next.clicked.connect(self.go_next)
+        nav.addWidget(self.back)
+        nav.addWidget(self.next)
+        root.addLayout(nav)
+        self.update_buttons()
+
+    def page(self):
+        return self.stack.currentWidget().widget()
+
+    def update_buttons(self):
+        if not hasattr(self, "next"):  # Fenster wird noch aufgebaut
+            return
+        idx = self.stack.currentIndex()
+        self.steps.setText(f"Schritt {min(idx + 1, 5)} von 5" if idx < 5 else "")
+        self.back.setVisible(idx < 5 and not self.installing)
+        self.next.setVisible(idx < 4)
+        self.back.setEnabled(idx > 0 and not self.installing)
+        self.next.setText("&Installieren" if idx == 3 else "&Weiter")
+        self.next.setEnabled(self.page().can_continue())
+
+    def go_next(self):
+        idx = self.stack.currentIndex()
+        if idx == 2:
+            self.summary.fill()
+        self.stack.setCurrentIndex(idx + 1)
+        if idx + 1 == 4:
+            self.installing = True
+            self.progress.start()
+        if idx + 1 == 2:  # Konto-Seite: gleich ins Namensfeld schreiben können
+            self.userp.name.setFocus()
+        if idx + 1 == 3:  # Zusammenfassung: Häkchen direkt mit Leertaste setzbar
+            self.summary.confirm.setFocus()
+        self.update_buttons()
+
+    def go_back(self):
+        idx = self.stack.currentIndex()
+        self.stack.setCurrentIndex(3 if idx == 4 else idx - 1)
+        self.update_buttons()
+
+    def go_done(self):
+        self.stack.setCurrentIndex(5)
+        self.update_buttons()
+
+    def closeEvent(self, ev):
+        if self.installing:
+            QMessageBox.warning(self, "NovaPlay installieren",
+                                "Die Installation läuft noch. Bitte warte, bis sie fertig ist.")
+            ev.ignore()
+        else:
+            ev.accept()
+
+
+def main():
+    app = QApplication(sys.argv)
+    app.setApplicationName("NovaPlay Installer")
+    app.setDesktopFileName("novaplay-install")
+    paths = QIcon.themeSearchPaths()
+    if "/usr/share/icons" not in paths:
+        QIcon.setThemeSearchPaths(paths + ["/usr/share/icons"])
+    if not QIcon.themeName():
+        QIcon.setThemeName("Papirus-Dark")
+    app.setStyleSheet(STYLE)
+    w = Wizard()
+    def fit_to_screen():
+        scr = w.screen().availableGeometry() if w.screen() else None
+        if scr is not None and scr.width() >= 480 and scr.height() >= 400:
+            w.resize(min(w.width(), scr.width() - 40), min(w.height(), scr.height() - 60))
+    w.show()
+    QTimer.singleShot(0, fit_to_screen)
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

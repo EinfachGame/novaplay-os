@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+"""NovaPlay Notizen – schnelle Notizen wie die Windows-Kurznotizen.
+
+Notizen werden automatisch gespeichert in ~/.local/share/novaplay/notes.json.
+"""
+import json
+import sys
+import time
+import uuid
+from pathlib import Path
+
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QColor, QIcon, QPixmap
+from PyQt6.QtWidgets import (
+    QApplication, QHBoxLayout, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit,
+    QPushButton, QVBoxLayout, QWidget,
+)
+
+STORE = Path.home() / ".local/share/novaplay/notes.json"
+COLORS = {"Lila": "#3b2470", "Cyan": "#0f3a4a", "Pink": "#5a1f4a", "Gelb": "#5a4a14", "Grün": "#173f2c"}
+
+STYLE = """
+QWidget { background: #0c0818; color: #f0ebff; font-size: 11pt; }
+QListWidget { background: #120c24; border: none; padding: 6px; }
+QListWidget::item { padding: 10px; border-radius: 10px; margin: 3px; }
+QListWidget::item:selected { border: 2px solid #00dcff; }
+QPlainTextEdit { border: none; border-radius: 12px; padding: 14px; font-size: 13pt; }
+QPushButton { background: #1a1030; border: 2px solid #2e1d55; border-radius: 10px; padding: 7px 12px; }
+QPushButton:hover { border-color: #a855ff; }
+"""
+
+
+def dot(col):
+    pm = QPixmap(14, 14)
+    pm.fill(QColor(col))
+    return QIcon(pm)
+
+
+def load():
+    try:
+        return json.loads(STORE.read_text())
+    except (OSError, ValueError):
+        return []
+
+
+def save(notes):
+    STORE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = STORE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(notes, ensure_ascii=False, indent=1))
+    tmp.replace(STORE)
+
+
+class Notes(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("NovaPlay Notizen")
+        self.setWindowIcon(QIcon.fromTheme("knotes", QIcon.fromTheme("note")))
+        self.resize(860, 560)
+        self.notes = load()
+        h = QHBoxLayout(self)
+        left = QVBoxLayout()
+        new = QPushButton("+ Neue Notiz")
+        new.clicked.connect(self.add)
+        left.addWidget(new)
+        self.list = QListWidget()
+        self.list.setFixedWidth(260)
+        self.list.currentRowChanged.connect(self.show_note)
+        left.addWidget(self.list, 1)
+        h.addLayout(left)
+        right = QVBoxLayout()
+        bar = QHBoxLayout()
+        for name, col in COLORS.items():
+            b = QPushButton()
+            b.setToolTip(name)
+            b.setFixedSize(30, 30)
+            b.setStyleSheet(f"background: {col}; border-radius: 15px;")
+            b.clicked.connect(lambda _=False, c=col: self.set_color(c))
+            bar.addWidget(b)
+        bar.addStretch()
+        delete = QPushButton("Löschen")
+        delete.clicked.connect(self.delete)
+        bar.addWidget(delete)
+        right.addLayout(bar)
+        self.edit = QPlainTextEdit()
+        self.edit.setPlaceholderText("Schreib etwas …")
+        self.edit.textChanged.connect(self.changed)
+        right.addWidget(self.edit, 1)
+        h.addLayout(right, 1)
+        self.timer = QTimer(self, singleShot=True, interval=600)
+        self.timer.timeout.connect(lambda: save(self.notes))
+        if not self.notes:
+            self.add()
+        self.refresh_list(0)
+
+    def current(self):
+        r = self.list.currentRow()
+        return self.notes[r] if 0 <= r < len(self.notes) else None
+
+    def refresh_list(self, select):
+        self.list.blockSignals(True)
+        self.list.clear()
+        for n in self.notes:
+            first = (n["text"].strip().splitlines() or ["Leere Notiz"])[0][:40]
+            it = QListWidgetItem(dot(n["color"]), first)
+            self.list.addItem(it)
+        self.list.blockSignals(False)
+        if self.notes:
+            self.list.setCurrentRow(max(0, min(select, len(self.notes) - 1)))
+            self.show_note(self.list.currentRow())
+
+    def show_note(self, row):
+        n = self.notes[row] if 0 <= row < len(self.notes) else None
+        self.edit.blockSignals(True)
+        self.edit.setPlainText(n["text"] if n else "")
+        self.edit.setStyleSheet(f"background: {n['color'] if n else '#1a1030'};")
+        self.edit.blockSignals(False)
+
+    def add(self):
+        self.notes.insert(0, {"id": uuid.uuid4().hex, "text": "", "color": COLORS["Lila"], "changed": time.time()})
+        save(self.notes)
+        self.refresh_list(0)
+        self.edit.setFocus()
+
+    def changed(self):
+        n = self.current()
+        if not n:
+            return
+        n["text"] = self.edit.toPlainText()
+        n["changed"] = time.time()
+        first = (n["text"].strip().splitlines() or ["Leere Notiz"])[0][:40]
+        self.list.currentItem().setText(first)
+        self.timer.start()
+
+    def set_color(self, col):
+        n = self.current()
+        if n:
+            n["color"] = col
+            save(self.notes)
+            self.list.currentItem().setIcon(dot(col))
+            self.edit.setStyleSheet(f"background: {col};")
+
+    def delete(self):
+        n = self.current()
+        if not n:
+            return
+        if n["text"].strip() and QMessageBox.question(self, "Notiz löschen",
+                                                      "Diese Notiz wirklich löschen?") != QMessageBox.StandardButton.Yes:
+            return
+        r = self.list.currentRow()
+        self.notes.pop(r)
+        save(self.notes)
+        if not self.notes:
+            self.add()
+        else:
+            self.refresh_list(r)
+
+    def closeEvent(self, ev):
+        save(self.notes)
+        ev.accept()
+
+
+def main():
+    app = QApplication(sys.argv)
+    app.setApplicationName("NovaPlay Notizen")
+    app.setDesktopFileName("novaplay-notes")
+    paths = QIcon.themeSearchPaths()
+    if "/usr/share/icons" not in paths:
+        QIcon.setThemeSearchPaths(paths + ["/usr/share/icons"])
+    if not QIcon.themeName():
+        QIcon.setThemeName("Papirus-Dark")
+    app.setStyleSheet(STYLE)
+    w = Notes()
+    w.show()
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

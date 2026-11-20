@@ -17,8 +17,13 @@ Installer und dem NovaPlay Center.
 |---|---|
 | Oberfläche | KDE Plasma 6, NovaPlay-Farbschema (Neon-Lila/Cyan), Papirus-Icons, Firefox, Dolphin |
 | NovaPlay Center | Willkommens-App: Spiele-Launcher, Updates, Backups, Firewall, Drucker, Hilfe – alles mit einem Klick |
+| NovaPlay Einstellungen | Eigenes, einfaches Einstellungsmenü (Gaming, Anzeige & Ton, Energie, Aussehen, Apps, Sicherheit …) |
+| NovaPlay Spiele | Spielebibliothek für Steam, Epic, GOG und Lutris – wie die Xbox-App |
+| NovaPlay App-Installer | Heruntergeladene Programme per Doppelklick installieren (.exe, .msi, .AppImage, .flatpakref) |
+| Windows-Ersatz-Apps | Paint (KolourPaint), Notizen, Uhr & Wecker, Wetter, Kamera, Musik, Videoschnitt, Malen, Mail & Kalender, Sprachrekorder, Rechner, Solitär, Minesweeper, Mahjongg, Sudoku |
 | Gaming | Steam (Proton), Lutris, Wine (+ Mono/Gecko), Winetricks, Protontricks, umu-launcher, GameMode, MangoHud, GOverlay, gamescope, CoreCtrl |
-| Weitere Launcher | Heroic (Epic + GOG), ProtonUp-Qt (Proton-GE) und Discord – werden nach der Installation automatisch nachgeladen |
+| Proton ab Werk | Neuestes GE-Proton vorinstalliert, „Steam Play für alle Spiele“ automatisch an |
+| Weitere Launcher | Heroic (Epic + GOG), ProtonUp-Qt und Discord – werden nach der Installation automatisch nachgeladen |
 | Konsolen-Modus | Steam Big Picture im Vollbild, wie auf dem Steam Deck |
 | Kompatibilität | 32-Bit-Bibliotheken, VKD3D (DirectX 12), NTSync, Controller-Regeln (Xbox, PlayStation, Steam) |
 | Treiber | Mesa + Vulkan (AMD/Intel), NVIDIA-Treiber (nvidia-open, ab GTX 16xx/RTX 20xx) – NVIDIA wird automatisch erkannt |
@@ -48,9 +53,9 @@ Installer und dem NovaPlay Center.
    **F8** oder **Esc**), den USB-Stick (UEFI) wählen.
 4. Du landest im Live-Desktop (Benutzer `gamer`, Passwort `gamer`). Hier kannst du
    alles gefahrlos ausprobieren.
-5. Mit dem Internet verbinden, dann im **NovaPlay Center** (oder per Desktop-Symbol)
-   auf **„NovaPlay installieren“** klicken. Fragen beantworten, mit `JA` bestätigen.
-   ⚠️ **Die gewählte Festplatte wird komplett gelöscht.**
+5. Mit dem Internet verbinden und auf **„NovaPlay installieren“** klicken (Desktop oder NovaPlay Center).
+   Der Installer führt dich in 5 Schritten durch: Festplatte anklicken, Name und Passwort eingeben,
+   bestätigen, fertig. ⚠️ **Die gewählte Festplatte wird komplett gelöscht.**
 6. Nach 10–40 Minuten: USB-Stick abziehen, neu starten – fertig.
 
 Beim ersten Start richtet sich das System im Hintergrund noch kurz ein
@@ -70,6 +75,19 @@ dauert ein paar Minuten.
 - **Backups**: NovaPlay Center → *Backups* → Timeshift einmal einrichten (z. B. wöchentlich).
 - **Updates**: NovaPlay Center → *Updates* (oder im Terminal `sudo pacman -Syu`).
 - **Proton-GE** (für Problem-Spiele): ProtonUp-Qt → *Add version* → GE-Proton → Steam neu starten.
+
+## Programme aus dem Internet installieren
+
+Datei herunterladen und **doppelklicken** – der NovaPlay App-Installer kümmert sich um den Rest:
+
+| Datei | Was passiert |
+|---|---|
+| `.exe`, `.msi` | Windows-Programm wird mit Wine installiert und erscheint im Startmenü |
+| `.AppImage` | Wird in „Anwendungen“ abgelegt, mit Startmenü-Eintrag |
+| `.flatpakref`, `.flatpak` | Wird über den App-Store installiert |
+| `.deb`, `.rpm` | Passt nicht zu NovaPlay → NovaPlay sucht dieselbe App im App-Store |
+
+Noch einfacher: Fast alles gibt es direkt im **App-Store** (NovaPlay Center → App-Store).
 
 ## Was nicht läuft (ehrlich gesagt)
 

@@ -2,7 +2,7 @@
 Type=Application
 Name=NovaPlay installieren
 Comment=NovaPlay OS fest auf die Festplatte installieren
-Exec=konsole --hold -e sudo /usr/local/bin/novaplay-install
+Exec=/usr/local/bin/novaplay-installer
 Icon=system-software-install
 Terminal=false
 Categories=System;

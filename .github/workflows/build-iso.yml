@@ -31,6 +31,11 @@ jobs:
           sudo docker image prune -af >/dev/null
           sudo mkdir -p /mnt/work && df -h / /mnt
 
+      - name: GE-Proton herunterladen (wird bei der Installation vorinstalliert)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash profile/airootfs/usr/local/bin/novaplay-fetch-proton-ge download profile/airootfs/usr/share/novaplay/proton-ge
+
       - name: ISO bauen (im Arch-Linux-Container)
         run: |
           mkdir -p out

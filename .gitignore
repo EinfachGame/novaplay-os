@@ -3,3 +3,5 @@ work/
 *.iso
 *.sha256
 __pycache__/
+profile/airootfs/usr/share/novaplay/proton-ge/
+__pycache__/

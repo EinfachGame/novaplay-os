@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=NovaPlay Notizen
+Comment=Schnelle Notizen
+Exec=/usr/local/bin/novaplay-notes
+Icon=knotes
+Terminal=false
+Categories=Utility;

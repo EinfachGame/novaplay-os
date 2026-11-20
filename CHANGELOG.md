@@ -1,5 +1,33 @@
 # Neuerungen
 
+## 1.1 – November 2026
+
+**Neu: Grafischer Installer** – Festplatte per Klick wählen, Name und Passwort in normale Felder,
+Fortschrittsbalken, am Ende „Neu starten“. Kein Terminal mehr nötig.
+
+**Neu: NovaPlay Einstellungen** – übersichtliches Einstellungsmenü: Gaming (Steam Play, Konsolen-Modus,
+FPS-Anzeige, Leistungsmodus, Controller), Anzeige & Ton (mit Lautstärkeregler), Netzwerk & Geräte,
+Aussehen (Hintergründe, hell/dunkel), Energie & Sperre, Apps & Updates, Konto & Sicherheit, System.
+
+**Neu: Proton ab Werk** – das neueste GE-Proton wird bei der Installation vorinstalliert (oder beim ersten
+Start nachgeladen), und „Steam Play für alle Spiele“ ist automatisch eingeschaltet.
+
+**Neu: Programme aus dem Internet per Doppelklick installieren** – der NovaPlay App-Installer erkennt
+.exe/.msi (Wine), .AppImage, .flatpakref/.flatpak und schlägt bei .deb/.rpm die passende App im App-Store vor.
+Bekannte Windows-Installer (Steam, Epic, Discord, Minecraft …) leitet er auf den besseren Linux-Weg um.
+
+**Neue eigene Apps**
+- NovaPlay Spiele – alle Spiele aus Steam, Epic, GOG (Heroic) und Lutris an einem Ort
+- NovaPlay Notizen – schnelle Notizen wie die Windows-Kurznotizen
+
+**Mehr Apps wie bei Windows**: KolourPaint (Paint), Uhr & Wecker, Wetter, Kamera, Elisa (Musik),
+Kdenlive (Videoschnitt), Krita (Malen), Thunderbird (Mail & Kalender), Sprachrekorder, Rechner,
+Zeichentabelle, Remotedesktop, Scanner, Solitär, Minesweeper, Mahjongg, Sudoku.
+
+**Kleinigkeiten**: Fenster öffnen sich in der Bildschirmmitte; die Ersteinrichtung installiert Heroic, ProtonUp-Qt
+und Discord auch dann, wenn der GE-Proton-Download gerade nicht klappt (neuer Versuch beim nächsten Start).
+
+
 ## 1.0.1 – November 2026
 
 **Fehlerbehebungen**

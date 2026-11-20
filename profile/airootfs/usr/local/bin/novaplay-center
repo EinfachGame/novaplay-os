@@ -76,9 +76,9 @@ def flatpak_app(app_id, name):
     return action
 
 
-def native_app(cmd, name):
+def native_app(cmd, name, needs=None):
     def action():
-        if has(cmd[0]):
+        if has(needs or cmd[0]):
             run_detached(cmd)
         else:
             QMessageBox.information(None, "NovaPlay Center", f"{name} ist nicht installiert.")
@@ -173,12 +173,14 @@ class Center(QWidget):
         if IS_LIVE:
             cv.addWidget(tile(["system-software-install"], "NovaPlay installieren",
                               "NovaPlay fest auf eine Festplatte installieren (die Festplatte wird gelöscht).",
-                              lambda: run_detached(["konsole", "--hold", "-e", "sudo", "/usr/local/bin/novaplay-install"]),
+                              lambda: run_detached(["/usr/local/bin/novaplay-installer"]),
                               big=True))
 
         cv.addWidget(section("🎮  Spielen", [
-            tile(["steam"], "Steam", "Steam öffnen. Tipp: Steam Play in den Einstellungen aktivieren.",
-                 native_app(["steam"], "Steam")),
+            tile(["applications-games"], "Meine Spiele", "Alle Spiele aus Steam, Epic, GOG und Lutris an einem Ort.",
+                 native_app(["/usr/local/bin/novaplay-games"], "NovaPlay Spiele")),
+            tile(["steam"], "Steam", "Steam öffnen – Steam Play (Proton) ist schon eingeschaltet.",
+                 native_app(["sh", "-c", "/usr/local/bin/novaplay-proton apply; exec steam"], "Steam", needs="steam")),
             tile(["com.heroicgameslauncher.hgl", "applications-games"], "Heroic",
                  "Epic Games und GOG (wird beim ersten Klick installiert, falls nötig).",
                  flatpak_app("com.heroicgameslauncher.hgl", "Heroic")),
@@ -206,8 +208,11 @@ class Center(QWidget):
                  native_app(["systemsettings", "kcm_printer_manager"], "Systemeinstellungen")),
             tile(["hwinfo", "computer"], "Systeminfo", "Grafikkarte, Prozessor, Arbeitsspeicher.",
                  native_app(["kinfocenter"], "Infozentrum")),
-            tile(["preferences-desktop-theme"], "Aussehen", "Design, Farben und Hintergrund anpassen.",
-                 native_app(["systemsettings", "kcm_lookandfeel"], "Systemeinstellungen")),
+            tile(["preferences-system"], "Einstellungen", "Gaming, Anzeige, Ton, Energie, Aussehen und mehr.",
+                 native_app(["/usr/local/bin/novaplay-settings"], "NovaPlay Einstellungen")),
+            tile(["system-software-install"], "Programm installieren",
+                 "Heruntergeladene Datei (.exe, .AppImage …) installieren – oder einfach doppelklicken.",
+                 native_app(["/usr/local/bin/novaplay-app-installer"], "NovaPlay App-Installer")),
             tile(["help-browser", "help-contents"], "Hilfe", "Anleitung und Fragen auf GitHub.",
                  lambda: run_detached(["xdg-open", HELP_URL])),
         ]))

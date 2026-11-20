@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=NovaPlay Spiele
+Comment=Alle Spiele aus Steam, Epic, GOG und Lutris
+Exec=/usr/local/bin/novaplay-games
+Icon=applications-games
+Terminal=false
+Categories=Game;

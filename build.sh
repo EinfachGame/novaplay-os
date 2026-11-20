@@ -15,6 +15,12 @@ mkdir -p out work
 
 [ "$(id -u)" -eq 0 ] || { echo "Bitte mit sudo starten: sudo ./build.sh"; exit 1; }
 
+echo "==> Lade neuestes GE-Proton (wird bei der Installation vorinstalliert) ..."
+if ! bash profile/airootfs/usr/local/bin/novaplay-fetch-proton-ge download \
+        profile/airootfs/usr/share/novaplay/proton-ge; then
+    echo "   WARNUNG: GE-Proton konnte nicht geladen werden – es wird dann beim ersten Start nachgeladen."
+fi
+
 if command -v mkarchiso >/dev/null 2>&1; then
     echo "==> Baue direkt mit mkarchiso ..."
     rm -rf work/*

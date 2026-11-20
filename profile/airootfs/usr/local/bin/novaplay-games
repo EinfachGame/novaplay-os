@@ -1,0 +1,329 @@
+#!/usr/bin/env python3
+"""NovaPlay Spiele – alle installierten Spiele an einem Ort.
+
+Liest Steam (Bibliotheksordner + appmanifest), Heroic (Epic/GOG) und Lutris
+(`lutris --list-games --installed --json`) und startet Spiele per Klick.
+"""
+import glob
+import json
+import os
+import re
+import shutil
+import sys
+from pathlib import Path
+
+import vdf
+from PyQt6.QtCore import QProcess, QSize, Qt
+from PyQt6.QtGui import QColor, QFont, QIcon, QLinearGradient, QPainter, QPixmap
+from PyQt6.QtWidgets import (
+    QApplication, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+    QScrollArea, QToolButton, QVBoxLayout, QWidget,
+)
+
+HOME = Path.home()
+STEAM_ROOTS = [HOME / ".local/share/Steam", HOME / ".steam/steam"]
+HEROIC_ROOTS = [HOME / ".var/app/com.heroicgameslauncher.hgl/config/heroic", HOME / ".config/heroic"]
+STEAM_SKIP = re.compile(r"^(Proton|Steam Linux Runtime|Steamworks Common|SteamVR)", re.I)
+COVER_W, COVER_H = 180, 270
+
+STYLE = """
+QWidget { background: #0c0818; color: #f0ebff; font-size: 11pt; }
+QLabel#title { font-size: 20pt; font-weight: bold; }
+QLabel#hint { color: #b8acd8; }
+QLineEdit { background: #1a1030; border: 2px solid #2e1d55; border-radius: 10px; padding: 7px; }
+QLineEdit:focus { border-color: #a855ff; }
+QPushButton { background: #1a1030; border: 2px solid #2e1d55; border-radius: 10px; padding: 7px 14px; }
+QPushButton:hover { border-color: #a855ff; }
+QPushButton:checked { background: #2e1d55; border-color: #00dcff; }
+QToolButton#game { background: transparent; border: 3px solid transparent; border-radius: 12px; padding: 4px; }
+QToolButton#game:hover { border-color: #00dcff; background: #1a1030; }
+QScrollArea { border: none; }
+"""
+
+SOURCE_COLORS = {"Steam": "#1b9aff", "Epic": "#f0ebff", "GOG": "#c46bff", "Lutris": "#ff9a1f"}
+
+
+# ---------------------------------------------------------------- Steam
+def steam_root():
+    for r in STEAM_ROOTS:
+        if (r / "steamapps").is_dir():
+            return r.resolve()
+    return None
+
+
+def steam_cover(root, appid):
+    cache = root / "appcache" / "librarycache"
+    for pattern in (f"{appid}/**/library_600x900*.jpg", f"{appid}/library_600x900*.jpg",
+                    f"{appid}_library_600x900*.jpg"):
+        hits = glob.glob(str(cache / pattern), recursive=True)
+        if hits:
+            return hits[0]
+    return None
+
+
+def steam_games():
+    root = steam_root()
+    if not root:
+        return []
+    libs = {root}
+    try:
+        with open(root / "steamapps" / "libraryfolders.vdf", encoding="utf-8", errors="replace") as fh:
+            data = vdf.load(fh)
+        for entry in data.get("libraryfolders", {}).values():
+            if isinstance(entry, dict) and entry.get("path"):
+                libs.add(Path(entry["path"]))
+    except (OSError, SyntaxError, ValueError):
+        pass
+    games = []
+    for lib in libs:
+        for acf in glob.glob(str(lib / "steamapps" / "appmanifest_*.acf")):
+            try:
+                with open(acf, encoding="utf-8", errors="replace") as fh:
+                    st = vdf.load(fh).get("AppState", {})
+            except (OSError, SyntaxError, ValueError):
+                continue
+            name, appid = st.get("name", ""), st.get("appid", "")
+            if not name or not appid or STEAM_SKIP.match(name):
+                continue
+            games.append({"name": name, "source": "Steam", "cover": steam_cover(root, appid),
+                          "cmd": ["steam", f"steam://rungameid/{appid}"]})
+    return games
+
+
+# ---------------------------------------------------------------- Heroic
+def heroic_root():
+    for r in HEROIC_ROOTS:
+        if r.is_dir():
+            return r
+    return None
+
+
+def heroic_cmd(runner, app):
+    url = f"heroic://launch/{runner}/{app}"
+    if (HOME / ".var/app/com.heroicgameslauncher.hgl").is_dir():
+        return ["flatpak", "run", "com.heroicgameslauncher.hgl", url]
+    return ["heroic", url]
+
+
+def find_titles(root):
+    """Sucht in Heroics Zwischenspeicher nach Spieletiteln (app_name -> title)."""
+    titles = {}
+
+    def walk(obj):
+        if isinstance(obj, dict):
+            app = obj.get("app_name") or obj.get("appName")
+            if isinstance(app, str) and isinstance(obj.get("title"), str):
+                titles.setdefault(app, obj["title"])
+            for v in obj.values():
+                walk(v)
+        elif isinstance(obj, list):
+            for v in obj:
+                walk(v)
+
+    for f in glob.glob(str(root / "**" / "*.json"), recursive=True):
+        try:
+            if os.path.getsize(f) < 30_000_000:
+                with open(f, encoding="utf-8", errors="replace") as fh:
+                    walk(json.load(fh))
+        except (OSError, ValueError):
+            continue
+    return titles
+
+
+def heroic_games():
+    root = heroic_root()
+    if not root:
+        return []
+    games = []
+    epic = root / "legendaryConfig" / "legendary" / "installed.json"
+    gog = root / "gog_store" / "installed.json"
+    titles = None
+    try:
+        for app, info in json.loads(epic.read_text()).items():
+            games.append({"name": info.get("title") or app, "source": "Epic", "cover": None,
+                          "cmd": heroic_cmd("legendary", app)})
+    except (OSError, ValueError, AttributeError):
+        pass
+    try:
+        for info in json.loads(gog.read_text()).get("installed", []):
+            app = info.get("appName")
+            if not app:
+                continue
+            if titles is None:
+                titles = find_titles(root)
+            games.append({"name": titles.get(app, app), "source": "GOG", "cover": None,
+                          "cmd": heroic_cmd("gog", app)})
+    except (OSError, ValueError, AttributeError):
+        pass
+    return games
+
+
+# ---------------------------------------------------------------- Lutris
+def parse_lutris(output):
+    start = output.find("[")
+    if start < 0:
+        return []
+    try:
+        data = json.loads(output[start:])
+    except ValueError:
+        return []
+    return [{"name": g.get("name") or g.get("slug"), "source": "Lutris", "cover": g.get("coverPath"),
+             "cmd": ["lutris", f"lutris:rungameid/{g['id']}"]} for g in data if g.get("id")]
+
+
+# ---------------------------------------------------------------- Oberfläche
+def placeholder(name, source):
+    pm = QPixmap(COVER_W, COVER_H)
+    p = QPainter(pm)
+    grad = QLinearGradient(0, 0, COVER_W, COVER_H)
+    grad.setColorAt(0, QColor("#2e1d55"))
+    grad.setColorAt(1, QColor("#0f2236"))
+    p.fillRect(pm.rect(), grad)
+    p.setPen(QColor(SOURCE_COLORS.get(source, "#a855ff")))
+    f = QFont()
+    f.setPointSize(44)
+    f.setBold(True)
+    p.setFont(f)
+    initials = "".join(w[0] for w in re.findall(r"[A-Za-z0-9ÄÖÜäöü]+", name)[:2]).upper() or "?"
+    p.drawText(pm.rect().adjusted(0, -30, 0, -30), Qt.AlignmentFlag.AlignCenter, initials)
+    f.setPointSize(11)
+    f.setBold(False)
+    p.setFont(f)
+    p.setPen(QColor("#f0ebff"))
+    p.drawText(pm.rect().adjusted(10, 150, -10, -10),
+               Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap, name)
+    p.end()
+    return pm
+
+
+class Library(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("NovaPlay Spiele")
+        self.setWindowIcon(QIcon.fromTheme("applications-games"))
+        self.resize(1180, 780)
+        self.games = []
+        self.filter = "Alle"
+        v = QVBoxLayout(self)
+        v.setContentsMargins(24, 18, 24, 12)
+        head = QHBoxLayout()
+        t = QLabel("Meine Spiele")
+        t.setObjectName("title")
+        head.addWidget(t)
+        head.addStretch()
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Suchen …")
+        self.search.setFixedWidth(260)
+        self.search.textChanged.connect(self.render)
+        head.addWidget(self.search)
+        refresh = QPushButton("Aktualisieren")
+        refresh.clicked.connect(self.load)
+        head.addWidget(refresh)
+        v.addLayout(head)
+        row = QHBoxLayout()
+        self.filters = {}
+        for name in ("Alle", "Steam", "Epic", "GOG", "Lutris"):
+            b = QPushButton(name)
+            b.setCheckable(True)
+            b.setChecked(name == "Alle")
+            b.clicked.connect(lambda _=False, n=name: self.set_filter(n))
+            self.filters[name] = b
+            row.addWidget(b)
+        row.addStretch()
+        for text, cmd in (("Steam-Shop", ["steam", "steam://store"]),
+                          ("Heroic", ["flatpak", "run", "com.heroicgameslauncher.hgl"]),
+                          ("Lutris", ["lutris"])):
+            b = QPushButton(text)
+            b.clicked.connect(lambda _=False, c=cmd: QProcess.startDetached(c[0], c[1:]))
+            row.addWidget(b)
+        v.addLayout(row)
+        self.status = QLabel("")
+        self.status.setObjectName("hint")
+        v.addWidget(self.status)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        v.addWidget(self.scroll, 1)
+        self.lutris_proc = None
+        self.load()
+
+    def set_filter(self, name):
+        self.filter = name
+        for n, b in self.filters.items():
+            b.setChecked(n == name)
+        self.render()
+
+    def load(self):
+        self.games = steam_games() + heroic_games()
+        self.render()
+        if shutil.which("lutris"):
+            self.lutris_proc = QProcess(self)
+            self.lutris_proc.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
+            self.lutris_proc.finished.connect(self.lutris_done)
+            self.lutris_proc.start("lutris", ["--list-games", "--installed", "--json"])
+            self.status.setText("Lade Lutris-Spiele …")
+
+    def lutris_done(self, *_):
+        out = bytes(self.lutris_proc.readAllStandardOutput()).decode(errors="replace")
+        self.games += parse_lutris(out)
+        self.render()
+
+    def render(self):
+        q = self.search.text().lower().strip()
+        shown = [g for g in self.games
+                 if (self.filter == "Alle" or g["source"] == self.filter) and q in g["name"].lower()]
+        shown.sort(key=lambda g: g["name"].lower())
+        w = QWidget()
+        grid = QGridLayout(w)
+        grid.setSpacing(14)
+        cols = max(1, (self.scroll.viewport().width() - 20) // (COVER_W + 30))
+        for i, g in enumerate(shown):
+            b = QToolButton()
+            b.setObjectName("game")
+            pm = QPixmap(g["cover"]) if g.get("cover") and os.path.exists(g["cover"]) else QPixmap()
+            if pm.isNull():
+                pm = placeholder(g["name"], g["source"])
+            else:
+                pm = pm.scaled(COVER_W, COVER_H, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                               Qt.TransformationMode.SmoothTransformation)
+            b.setIcon(QIcon(pm))
+            b.setIconSize(QSize(COVER_W, COVER_H))
+            b.setText(f"{g['name']}\n{g['source']}")
+            b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+            b.setFixedWidth(COVER_W + 20)
+            b.setToolTip(f"{g['name']} starten ({g['source']})")
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(lambda _=False, c=g["cmd"]: QProcess.startDetached(c[0], c[1:]))
+            grid.addWidget(b, i // cols, i % cols, Qt.AlignmentFlag.AlignTop)
+        grid.setRowStretch(len(shown) // cols + 1, 1)
+        grid.setColumnStretch(cols, 1)
+        if not self.games:
+            self.status.setText("Noch keine Spiele installiert. Installiere welche über Steam, Heroic "
+                                "(Epic/GOG) oder Lutris – sie erscheinen dann hier automatisch.")
+        else:
+            counts = {s: sum(1 for g in self.games if g["source"] == s) for s in SOURCE_COLORS}
+            self.status.setText(f"{len(self.games)} Spiele – " +
+                                ", ".join(f"{s}: {n}" for s, n in counts.items() if n))
+        self.scroll.setWidget(w)
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        self.render()
+
+
+def main():
+    app = QApplication(sys.argv)
+    app.setApplicationName("NovaPlay Spiele")
+    app.setDesktopFileName("novaplay-games")
+    paths = QIcon.themeSearchPaths()
+    if "/usr/share/icons" not in paths:
+        QIcon.setThemeSearchPaths(paths + ["/usr/share/icons"])
+    if not QIcon.themeName():
+        QIcon.setThemeName("Papirus-Dark")
+    app.setStyleSheet(STYLE)
+    w = Library()
+    w.show()
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

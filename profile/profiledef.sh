@@ -30,4 +30,12 @@ file_permissions=(
   ["/usr/local/bin/novaplay-live-user"]="0:0:755"
   ["/usr/local/bin/novaplay-firstboot"]="0:0:755"
   ["/usr/local/bin/novaplay-center"]="0:0:755"
+  ["/usr/local/bin/novaplay-installer"]="0:0:755"
+  ["/usr/local/bin/novaplay-proton"]="0:0:755"
+  ["/usr/local/bin/novaplay-settings"]="0:0:755"
+  ["/usr/local/bin/novaplay-settings-helper"]="0:0:755"
+  ["/usr/local/bin/novaplay-app-installer"]="0:0:755"
+  ["/usr/local/bin/novaplay-games"]="0:0:755"
+  ["/usr/local/bin/novaplay-notes"]="0:0:755"
+  ["/usr/local/bin/novaplay-fetch-proton-ge"]="0:0:755"
 )

@@ -1,0 +1,519 @@
+#!/usr/bin/env python3
+"""NovaPlay Einstellungen – übersichtliches Einstellungsmenü von NovaPlay OS.
+
+Die wichtigsten Einstellungen lassen sich direkt hier umschalten; für alles
+Weitere öffnen die Knöpfe die passende Seite der KDE-Systemeinstellungen.
+"""
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+from PyQt6.QtCore import QProcess, QSize, Qt
+from PyQt6.QtDBus import QDBusConnection, QDBusMessage
+from PyQt6.QtGui import QIcon, QPixmap
+from PyQt6.QtWidgets import (
+    QApplication, QCheckBox, QComboBox, QFileDialog, QGridLayout, QHBoxLayout,
+    QLabel, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QScrollArea,
+    QSlider, QStackedWidget, QVBoxLayout, QWidget,
+)
+
+VERSION_FILE = "/etc/novaplay-release"
+WALLPAPERS = [
+    ("Synthwave", "/usr/share/wallpapers/novaplay-synthwave.png"),
+    ("Sechsecke", "/usr/share/wallpapers/novaplay-hex.png"),
+    ("Minimal", "/usr/share/wallpapers/novaplay-minimal.png"),
+]
+MANGOHUD_ENV = Path.home() / ".config/environment.d/90-novaplay-mangohud.conf"
+SDDM_CONF = "/etc/sddm.conf.d/10-novaplay.conf"
+IS_LIVE = Path("/run/archiso").exists()
+
+STYLE = """
+QWidget { background: #0c0818; color: #f0ebff; font-size: 11pt; }
+QListWidget { background: #120c24; border: none; padding: 8px; font-size: 12pt; }
+QListWidget::item { padding: 10px; border-radius: 10px; margin: 2px; }
+QListWidget::item:selected { background: #2e1d55; color: #ffffff; }
+QListWidget::item:hover { background: #1f1440; }
+QLabel#title { font-size: 20pt; font-weight: bold; }
+QLabel#hint { color: #b8acd8; }
+QLabel#section { color: #a855ff; font-size: 13pt; font-weight: bold; margin-top: 12px; }
+QWidget#card { background: #1a1030; border: 2px solid #2e1d55; border-radius: 14px; }
+QPushButton { background: #1a1030; border: 2px solid #2e1d55; border-radius: 10px; padding: 8px 14px; }
+QPushButton:hover { border-color: #a855ff; }
+QPushButton#wall { padding: 4px; }
+QPushButton#wall:checked { border-color: #00dcff; }
+QComboBox { background: #1a1030; border: 2px solid #2e1d55; border-radius: 8px; padding: 6px; }
+QSlider::groove:horizontal { height: 8px; background: #2e1d55; border-radius: 4px; }
+QSlider::sub-page:horizontal { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #a855ff, stop:1 #00dcff); border-radius: 4px; }
+QSlider::handle:horizontal { background: #ffffff; width: 18px; margin: -6px 0; border-radius: 9px; }
+QCheckBox::indicator { width: 40px; height: 22px; border-radius: 11px; background: #2e1d55; }
+QCheckBox::indicator:checked { background: #00dcff; }
+QScrollArea { border: none; }
+"""
+
+
+# ---------------------------------------------------------------- Hilfen
+def run(cmd):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return subprocess.CompletedProcess(cmd, 1, "", str(e))
+
+
+def open_kcm(name):
+    QProcess.startDetached("kcmshell6", [name])
+
+
+def start(cmd, *args):
+    if shutil.which(cmd):
+        QProcess.startDetached(cmd, list(args))
+    else:
+        QMessageBox.information(None, "NovaPlay Einstellungen", f"„{cmd}“ ist nicht installiert.")
+
+
+def kread(file, groups, key, default=""):
+    args = ["kreadconfig6", "--file", file]
+    for g in groups:
+        args += ["--group", g]
+    args += ["--key", key, "--default", str(default)]
+    return run(args).stdout.strip()
+
+
+def kwrite(file, groups, key, value, typ=None):
+    args = ["kwriteconfig6", "--file", file]
+    for g in groups:
+        args += ["--group", g]
+    if typ:
+        args += ["--type", typ]
+    args += ["--key", key, str(value)]
+    run(args)
+
+
+def dbus_call(service, path, iface, method):
+    msg = QDBusMessage.createMethodCall(service, path, iface, method)
+    QDBusConnection.sessionBus().call(msg)
+
+
+def root_helper(*args):
+    r = run(["pkexec", "/usr/local/bin/novaplay-settings-helper", *args])
+    if r.returncode not in (0,):
+        text = (r.stdout + r.stderr).strip() or "Abgebrochen."
+        QMessageBox.warning(None, "NovaPlay Einstellungen", text)
+        return False
+    return True
+
+
+# ---------------------------------------------------------------- Bausteine
+def label(text, name=None):
+    lbl = QLabel(text)
+    lbl.setWordWrap(True)
+    if name:
+        lbl.setObjectName(name)
+    return lbl
+
+
+def card(title, text, control):
+    w = QWidget()
+    w.setObjectName("card")
+    w.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    h = QHBoxLayout(w)
+    h.setContentsMargins(16, 12, 16, 12)
+    v = QVBoxLayout()
+    t = QLabel(f"<b>{title}</b>")
+    t.setStyleSheet("background: transparent;")
+    v.addWidget(t)
+    if text:
+        d = label(text, "hint")
+        d.setStyleSheet("background: transparent;")
+        v.addWidget(d)
+    h.addLayout(v, 1)
+    if control is not None:
+        h.addWidget(control)
+    return w
+
+
+def link_button(text, func):
+    b = QPushButton(text)
+    b.clicked.connect(func)
+    return b
+
+
+class Page(QWidget):
+    def __init__(self, title, subtitle):
+        super().__init__()
+        self.v = QVBoxLayout(self)
+        self.v.setContentsMargins(28, 20, 28, 20)
+        self.v.setSpacing(10)
+        self.v.addWidget(label(title, "title"))
+        self.v.addWidget(label(subtitle, "hint"))
+
+    def section(self, text):
+        self.v.addWidget(label(text, "section"))
+
+    def add(self, w):
+        self.v.addWidget(w)
+
+    def buttons(self, *pairs):
+        row = QHBoxLayout()
+        for text, func in pairs:
+            row.addWidget(link_button(text, func))
+        row.addStretch()
+        self.v.addLayout(row)
+
+    def finish(self):
+        self.v.addStretch()
+
+
+# ---------------------------------------------------------------- Seiten
+class GamingPage(Page):
+    def __init__(self):
+        super().__init__("Gaming", "Alles für deine Spiele.")
+        self.section("Steam")
+        self.steamplay = QCheckBox()
+        self.steamplay.setChecked(self.proton_status().startswith("an"))
+        self.steamplay.toggled.connect(self.set_steamplay)
+        self.add(card("Steam Play (Proton) für alle Spiele",
+                      "Damit laufen auch Windows-Spiele. Standard ist das vorinstallierte GE-Proton. "
+                      "Steam muss zum Umschalten geschlossen sein.", self.steamplay))
+        self.console = QCheckBox()
+        self.console.setChecked("Session=novaplay-steam" in self.sddm_conf())
+        self.console.toggled.connect(self.set_console)
+        self.add(card("Beim Start direkt in den Konsolen-Modus",
+                      "Startet Steam im Vollbild wie auf einer Konsole. Braucht die automatische Anmeldung.",
+                      self.console))
+        self.section("Leistung")
+        self.overlay = QCheckBox()
+        self.overlay.setChecked(MANGOHUD_ENV.exists())
+        self.overlay.toggled.connect(self.set_overlay)
+        self.add(card("FPS-Anzeige in allen Spielen",
+                      "Zeigt Bilder pro Sekunde, Temperaturen und Auslastung (MangoHud). "
+                      "Ein/aus im Spiel: Rechte Umschalttaste + F12. Wirkt nach der nächsten Anmeldung.",
+                      self.overlay))
+        self.profile = QComboBox()
+        self.profiles = {"performance": "Höchstleistung", "balanced": "Ausgewogen", "power-saver": "Energiesparen"}
+        avail = run(["powerprofilesctl", "list"]).stdout
+        for key, name in self.profiles.items():
+            if key in avail or not avail:
+                self.profile.addItem(name, key)
+        cur = run(["powerprofilesctl", "get"]).stdout.strip()
+        i = self.profile.findData(cur)
+        if i >= 0:
+            self.profile.setCurrentIndex(i)
+        self.profile.currentIndexChanged.connect(self.set_profile)
+        self.add(card("Leistungsmodus", "Für Spiele am besten „Höchstleistung“ (falls verfügbar).", self.profile))
+        self.section("Mehr")
+        self.buttons(("Controller", lambda: open_kcm("kcm_gamecontroller")),
+                     ("ProtonUp-Qt (Proton-Versionen)", lambda: start("flatpak", "run", "net.davidotek.pupgui2")),
+                     ("Grafikkarte (CoreCtrl)", lambda: start("corectrl")))
+        self.finish()
+
+    @staticmethod
+    def proton_status():
+        return run(["/usr/local/bin/novaplay-proton", "status"]).stdout.strip()
+
+    @staticmethod
+    def sddm_conf():
+        try:
+            return Path(SDDM_CONF).read_text()
+        except OSError:
+            return ""
+
+    def set_steamplay(self, on):
+        r = run(["/usr/local/bin/novaplay-proton", "enable" if on else "disable"])
+        msg = (r.stdout + r.stderr).strip()
+        if r.returncode != 0:
+            QMessageBox.warning(self, "Steam Play", msg)
+            self.steamplay.blockSignals(True)
+            self.steamplay.setChecked(not on)
+            self.steamplay.blockSignals(False)
+        elif msg:
+            QMessageBox.information(self, "Steam Play", msg)
+
+    def set_console(self, on):
+        if not root_helper("session", "console" if on else "plasma"):
+            self.console.blockSignals(True)
+            self.console.setChecked(not on)
+            self.console.blockSignals(False)
+
+    def set_overlay(self, on):
+        if on:
+            MANGOHUD_ENV.parent.mkdir(parents=True, exist_ok=True)
+            MANGOHUD_ENV.write_text("# NovaPlay: FPS-Anzeige in allen Spielen\nMANGOHUD=1\n")
+        else:
+            MANGOHUD_ENV.unlink(missing_ok=True)
+
+    def set_profile(self, _i):
+        r = run(["powerprofilesctl", "set", self.profile.currentData()])
+        if r.returncode != 0:
+            QMessageBox.warning(self, "Leistungsmodus", (r.stderr or r.stdout).strip())
+
+
+class DisplayPage(Page):
+    def __init__(self):
+        super().__init__("Anzeige & Ton", "Bildschirm, Lautstärke und Lautsprecher.")
+        self.section("Bildschirm")
+        self.add(card("Auflösung, Bildwiederholrate, Skalierung",
+                      "Hier stellst du z. B. 144 Hz oder mehrere Monitore ein.",
+                      link_button("Öffnen", lambda: open_kcm("kcm_kscreen"))))
+        self.add(card("Nachtlicht", "Wärmere Farben am Abend, schont die Augen.",
+                      link_button("Öffnen", lambda: open_kcm("kcm_nighttime"))))
+        self.section("Ton")
+        self.vol = QSlider(Qt.Orientation.Horizontal)
+        self.vol.setRange(0, 100)
+        self.vol.setFixedWidth(220)
+        self.vol.setValue(self.get_volume())
+        self.vol.valueChanged.connect(self.set_volume)
+        self.add(card("Lautstärke", "", self.vol))
+        self.add(card("Lautsprecher, Kopfhörer, Mikrofon", "Ausgabe- und Eingabegeräte wählen.",
+                      link_button("Öffnen", lambda: open_kcm("kcm_pulseaudio"))))
+        self.finish()
+
+    @staticmethod
+    def get_volume():
+        out = run(["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"]).stdout
+        m = re.search(r"Volume:\s*([0-9.]+)", out)
+        return int(float(m.group(1)) * 100) if m else 50
+
+    @staticmethod
+    def set_volume(v):
+        run(["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{v / 100:.2f}"])
+
+
+class NetworkPage(Page):
+    def __init__(self):
+        super().__init__("Netzwerk & Geräte", "Internet, Bluetooth, Maus, Tastatur, Drucker.")
+        for title, text, kcm in [
+            ("WLAN & Netzwerk", "Mit WLAN oder Kabel verbinden.", "kcm_networkmanagement"),
+            ("Bluetooth", "Kopfhörer, Controller und mehr koppeln.", "kcm_bluetooth"),
+            ("Maus", "Geschwindigkeit, Beschleunigung.", "kcm_mouse"),
+            ("Tastatur", "Tastaturlayout und Wiederholrate.", "kcm_keyboard"),
+            ("Drucker", "Drucker hinzufügen.", "kcm_printer_manager"),
+        ]:
+            self.add(card(title, text, link_button("Öffnen", lambda _=False, k=kcm: open_kcm(k))))
+        self.finish()
+
+
+class LookPage(Page):
+    def __init__(self):
+        super().__init__("Aussehen", "Hintergrund und Farben.")
+        self.section("Hintergrundbild")
+        grid = QGridLayout()
+        for i, (name, path) in enumerate(WALLPAPERS):
+            b = QPushButton()
+            b.setObjectName("wall")
+            if os.path.exists(path):
+                b.setIcon(QIcon(QPixmap(path).scaled(200, 112, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                                                     Qt.TransformationMode.SmoothTransformation)))
+            b.setIconSize(QSize(200, 112))
+            b.setToolTip(name)
+            b.clicked.connect(lambda _=False, p=path: run(["plasma-apply-wallpaperimage", p]))
+            grid.addWidget(b, 0, i)
+            grid.addWidget(label(name, "hint"), 1, i)
+        self.v.addLayout(grid)
+        self.buttons(("Eigenes Bild wählen …", lambda: open_kcm("kcm_wallpaper")))
+        self.section("Farben")
+        self.buttons(("NovaPlay (dunkel)", lambda: run(["plasma-apply-colorscheme", "NovaPlay"])),
+                     ("Hell", lambda: run(["plasma-apply-colorscheme", "BreezeLight"])),
+                     ("Weitere Designs", lambda: open_kcm("kcm_lookandfeel")))
+        self.finish()
+
+
+class PowerPage(Page):
+    OFF_CHOICES = [("Nie", 0), ("5 Minuten", 300), ("10 Minuten", 600), ("15 Minuten", 900),
+                   ("30 Minuten", 1800), ("1 Stunde", 3600)]
+    SLEEP_CHOICES = [("Nie", 0), ("30 Minuten", 1800), ("1 Stunde", 3600), ("2 Stunden", 7200)]
+    LOCK_CHOICES = [("Nie", 0), ("5 Minuten", 5), ("10 Minuten", 10), ("15 Minuten", 15), ("30 Minuten", 30)]
+
+    def __init__(self):
+        super().__init__("Energie & Sperre", "Wann der Bildschirm ausgeht und ob der PC gesperrt wird.")
+        g = ["AC", "Display"]
+        off_on = kread("powerdevilrc", g, "TurnOffDisplayWhenIdle", "true") != "false"
+        off_sec = int(kread("powerdevilrc", g, "TurnOffDisplayIdleTimeoutSec", "600") or 600)
+        self.off = self.combo(self.OFF_CHOICES, off_sec if off_on else 0)
+        self.off.currentIndexChanged.connect(self.set_off)
+        self.add(card("Bildschirm ausschalten nach", "Am Netzstrom.", self.off))
+        s = ["AC", "SuspendAndShutdown"]
+        sleep_on = kread("powerdevilrc", s, "AutoSuspendAction", "0") not in ("0", "")
+        sleep_sec = int(kread("powerdevilrc", s, "AutoSuspendIdleTimeoutSec", "3600") or 3600)
+        self.sleep = self.combo(self.SLEEP_CHOICES, sleep_sec if sleep_on else 0)
+        self.sleep.currentIndexChanged.connect(self.set_sleep)
+        self.add(card("Ruhezustand nach", "„Nie“ verhindert, dass lange Downloads abbrechen.", self.sleep))
+        lock_on = kread("kscreenlockerrc", ["Daemon"], "Autolock", "true") == "true"
+        lock_min = int(float(kread("kscreenlockerrc", ["Daemon"], "Timeout", "5") or 5))
+        self.lock = self.combo(self.LOCK_CHOICES, lock_min if lock_on else 0)
+        self.lock.currentIndexChanged.connect(self.set_lock)
+        self.add(card("Automatisch sperren nach",
+                      "Manuell sperren geht immer mit Win + L. Hinweis: In virtuellen Maschinen "
+                      "kann der Sperrbildschirm Probleme machen.", self.lock))
+        if IS_LIVE:
+            self.add(label("Im Live-System gelten diese Einstellungen nur bis zum Neustart.", "hint"))
+        self.buttons(("Weitere Energie-Einstellungen", lambda: open_kcm("kcm_powerdevilprofilesconfig")))
+        self.finish()
+
+    @staticmethod
+    def combo(choices, current):
+        c = QComboBox()
+        for name, val in choices:
+            c.addItem(name, val)
+        i = c.findData(current)
+        c.setCurrentIndex(i if i >= 0 else 0)
+        return c
+
+    @staticmethod
+    def reload_power():
+        dbus_call("org.kde.Solid.PowerManagement", "/org/kde/Solid/PowerManagement",
+                  "org.kde.Solid.PowerManagement", "reparseConfiguration")
+
+    def set_off(self, _i):
+        sec = self.off.currentData()
+        kwrite("powerdevilrc", ["AC", "Display"], "TurnOffDisplayWhenIdle", "true" if sec else "false", "bool")
+        if sec:
+            kwrite("powerdevilrc", ["AC", "Display"], "TurnOffDisplayIdleTimeoutSec", sec)
+        self.reload_power()
+
+    def set_sleep(self, _i):
+        sec = self.sleep.currentData()
+        kwrite("powerdevilrc", ["AC", "SuspendAndShutdown"], "AutoSuspendAction", 1 if sec else 0)
+        if sec:
+            kwrite("powerdevilrc", ["AC", "SuspendAndShutdown"], "AutoSuspendIdleTimeoutSec", sec)
+        self.reload_power()
+
+    def set_lock(self, _i):
+        mins = self.lock.currentData()
+        kwrite("kscreenlockerrc", ["Daemon"], "Autolock", "true" if mins else "false", "bool")
+        if mins:
+            kwrite("kscreenlockerrc", ["Daemon"], "Timeout", mins)
+        dbus_call("org.kde.screensaver", "/ScreenSaver", "org.kde.screensaver", "configure")
+
+
+class AppsPage(Page):
+    def __init__(self):
+        super().__init__("Apps & Updates", "Programme installieren, aktualisieren und Standard-Apps wählen.")
+        self.add(card("App-Store", "Tausende Apps – Spiele, Musik, Grafik, Tools.",
+                      link_button("Öffnen", lambda: start("plasma-discover"))))
+        self.add(card("Programm aus einer Datei installieren",
+                      "Für heruntergeladene Dateien (.exe, .msi, .AppImage, .flatpakref …). "
+                      "Tipp: Ein Doppelklick auf die Datei macht dasselbe.",
+                      link_button("Datei wählen …", self.pick_file)))
+        self.add(card("Updates", "System und Apps aktualisieren.",
+                      link_button("Nach Updates suchen", lambda: start("plasma-discover", "--mode", "update"))))
+        self.add(card("Standard-Apps", "Welcher Browser, Mail- oder Musikprogramm Standard ist.",
+                      link_button("Öffnen", lambda: open_kcm("kcm_componentchooser"))))
+        self.add(card("Autostart", "Programme, die beim Anmelden starten.",
+                      link_button("Öffnen", lambda: open_kcm("kcm_autostart"))))
+        self.finish()
+
+    def pick_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Programm-Datei wählen", str(Path.home() / "Downloads"))
+        if path:
+            start("/usr/local/bin/novaplay-app-installer", path)
+
+
+class SecurityPage(Page):
+    def __init__(self):
+        super().__init__("Konto & Sicherheit", "Passwort, Firewall und Backups.")
+        self.add(card("Passwort & Konto", "Passwort ändern, Profilbild, weitere Benutzer.",
+                      link_button("Öffnen", lambda: open_kcm("kcm_users"))))
+        self.add(card("Automatische Anmeldung", "Beim Start ohne Passwort anmelden.",
+                      self.autologin_box()))
+        self.add(card("Firewall", "Schützt vor Zugriffen aus dem Netz (empfohlen: an).",
+                      link_button("Öffnen", lambda: open_kcm("kcm_firewall"))))
+        self.add(card("Backups (Timeshift)", "Sicherungspunkte des Systems – bei Problemen zurückspringen.",
+                      link_button("Öffnen", lambda: start("timeshift-launcher"))))
+        self.finish()
+
+    def autologin_box(self):
+        box = QCheckBox()
+        try:
+            box.setChecked("[Autologin]" in Path(SDDM_CONF).read_text())
+        except OSError:
+            box.setChecked(False)
+
+        def toggled(on):
+            ok = root_helper("autologin", "on", os.environ.get("USER", "")) if on else root_helper("autologin", "off")
+            if not ok:
+                box.blockSignals(True)
+                box.setChecked(not on)
+                box.blockSignals(False)
+        box.toggled.connect(toggled)
+        return box
+
+
+class SystemPage(Page):
+    def __init__(self):
+        super().__init__("System", "Sprache, Zeit, Speicher und Infos.")
+        for title, text, func in [
+            ("Sprache & Region", "Sprache, Datums- und Zahlenformat.", lambda: open_kcm("kcm_regionandlang")),
+            ("Datum & Uhrzeit", "Zeitzone und Uhr.", lambda: open_kcm("kcm_clock")),
+            ("Speicherplatz", "Zeigt, was wie viel Platz belegt.", lambda: start("filelight")),
+            ("Systeminfo", "Grafikkarte, Prozessor, Arbeitsspeicher.", lambda: start("kinfocenter")),
+            ("Alle Einstellungen", "Die vollständigen KDE-Systemeinstellungen.", lambda: start("systemsettings")),
+        ]:
+            self.add(card(title, text, link_button("Öffnen", func)))
+        try:
+            ver = Path(VERSION_FILE).read_text().strip()
+        except OSError:
+            ver = "NovaPlay OS"
+        self.add(label(ver + (" (Live-System)" if IS_LIVE else ""), "hint"))
+        self.finish()
+
+
+class Settings(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("NovaPlay Einstellungen")
+        self.setWindowIcon(QIcon.fromTheme("preferences-system"))
+        self.resize(1040, 720)
+        h = QHBoxLayout(self)
+        h.setContentsMargins(0, 0, 0, 0)
+        self.nav = QListWidget()
+        self.nav.setFixedWidth(240)
+        self.nav.setIconSize(QSize(26, 26))
+        self.stack = QStackedWidget()
+        pages = [
+            ("Gaming", ["input-gaming"], GamingPage),
+            ("Anzeige & Ton", ["video-display", "preferences-desktop-display"], DisplayPage),
+            ("Netzwerk & Geräte", ["network-wireless", "preferences-system-network"], NetworkPage),
+            ("Aussehen", ["preferences-desktop-theme", "preferences-desktop-wallpaper"], LookPage),
+            ("Energie & Sperre", ["preferences-system-power-management", "battery"], PowerPage),
+            ("Apps & Updates", ["system-software-update", "plasmadiscover"], AppsPage),
+            ("Konto & Sicherheit", ["security-high", "system-users"], SecurityPage),
+            ("System", ["computer", "hwinfo"], SystemPage),
+        ]
+        for name, icons, cls in pages:
+            icon = QIcon()
+            for n in icons:
+                icon = QIcon.fromTheme(n)
+                if not icon.isNull():
+                    break
+            QListWidgetItem(icon, name, self.nav)
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setWidget(cls())
+            self.stack.addWidget(scroll)
+        self.nav.currentRowChanged.connect(self.stack.setCurrentIndex)
+        self.nav.setCurrentRow(0)
+        h.addWidget(self.nav)
+        h.addWidget(self.stack, 1)
+
+
+def main():
+    app = QApplication(sys.argv)
+    app.setApplicationName("NovaPlay Einstellungen")
+    app.setDesktopFileName("novaplay-settings")
+    paths = QIcon.themeSearchPaths()
+    if "/usr/share/icons" not in paths:
+        QIcon.setThemeSearchPaths(paths + ["/usr/share/icons"])
+    if not QIcon.themeName():
+        QIcon.setThemeName("Papirus-Dark")
+    QIcon.setFallbackThemeName("breeze")
+    app.setStyleSheet(STYLE)
+    w = Settings()
+    w.show()
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

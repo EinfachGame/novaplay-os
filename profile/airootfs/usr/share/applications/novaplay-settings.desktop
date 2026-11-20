@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=NovaPlay Einstellungen
+Comment=Gaming, Anzeige, Ton, Energie und mehr
+Exec=/usr/local/bin/novaplay-settings
+Icon=preferences-system
+Terminal=false
+Categories=Settings;System;

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=NovaPlay App-Installer
+Comment=Programme aus dem Internet einfach installieren
+Exec=/usr/local/bin/novaplay-app-installer %f
+Icon=system-software-install
+Terminal=false
+Categories=System;PackageManager;
+MimeType=application/x-ms-dos-executable;application/x-msdownload;application/vnd.microsoft.portable-executable;application/x-msi;application/vnd.appimage;application/x-iso9660-appimage;application/vnd.flatpak.ref;application/vnd.flatpak.repo;application/vnd.flatpak;application/vnd.debian.binary-package;application/x-rpm;

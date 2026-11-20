@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""NovaPlay OS – Steam Play (Proton) für alle Spiele einschalten.
+
+  novaplay-proton status    zeigt, ob Steam Play für alle Spiele an ist
+  novaplay-proton apply     schaltet es ein, falls noch nicht eingestellt
+                            (läuft automatisch bei jeder Anmeldung)
+  novaplay-proton enable    schaltet es ein (überschreibt eigene Auswahl)
+  novaplay-proton disable   schaltet es aus
+
+Als Standard wird das vorinstallierte GE-Proton genutzt, sonst Proton Experimental.
+Steam muss dafür geschlossen sein, weil Steam die Datei beim Beenden überschreibt.
+"""
+import glob
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+import vdf  # python-vdf
+
+STEAM_DIRS = [os.path.expanduser("~/.local/share/Steam"), os.path.expanduser("~/.steam/steam")]
+SYSTEM_TOOLS = "/usr/share/steam/compatibilitytools.d"
+FALLBACK = "proton_experimental"
+
+
+def steam_root():
+    for d in STEAM_DIRS:
+        if os.path.isfile(os.path.join(d, "config", "config.vdf")):
+            return os.path.realpath(d)
+    return None
+
+
+def natural_key(s):
+    return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", s)]
+
+
+def installed_ge():
+    names = []
+    dirs = [SYSTEM_TOOLS]
+    root = steam_root()
+    if root:
+        dirs.append(os.path.join(root, "compatibilitytools.d"))
+    for d in dirs:
+        for f in glob.glob(os.path.join(d, "*", "compatibilitytool.vdf")):
+            try:
+                with open(f, encoding="utf-8", errors="replace") as fh:
+                    data = vdf.load(fh)
+                tools = data.get("compatibilitytools", {}).get("compat_tools", {})
+                names += [n for n in tools if n.lower().startswith("ge-proton")]
+            except (OSError, SyntaxError, ValueError):
+                continue
+    return sorted(set(names), key=natural_key)
+
+
+def default_tool():
+    ge = installed_ge()
+    return ge[-1] if ge else FALLBACK
+
+
+def steam_running():
+    return subprocess.run(["pgrep", "-x", "steam"], capture_output=True).returncode == 0
+
+
+def child(d, key):
+    """Schlüssel ohne Rücksicht auf Groß-/Kleinschreibung finden (Steam mischt das)."""
+    for k in d:
+        if k.lower() == key.lower():
+            return k
+    d[key] = {}
+    return key
+
+
+def mapping_section(data):
+    node = data
+    for key in ("InstallConfigStore", "Software", "Valve", "Steam", "CompatToolMapping"):
+        node = node[child(node, key)]
+    return node
+
+
+def load():
+    root = steam_root()
+    if not root:
+        return None, None
+    path = os.path.join(root, "config", "config.vdf")
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        return path, vdf.load(fh)
+
+
+def save(path, data):
+    shutil.copy2(path, path + ".novaplay-backup")
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        vdf.dump(data, fh, pretty=True)
+    os.replace(tmp, path)
+
+
+def status():
+    path, data = load()
+    if not path:
+        return "unbekannt (Steam wurde noch nie gestartet)"
+    m = mapping_section(data).get("0")
+    if isinstance(m, dict) and m.get("name"):
+        return f"an ({m['name']})"
+    return "aus"
+
+
+def set_mapping(force, enable=True):
+    if steam_running():
+        print("Steam läuft gerade – bitte Steam beenden und erneut versuchen.")
+        return 2
+    path, data = load()
+    if not path:
+        print("Steam wurde noch nie gestartet – wird beim nächsten Mal eingestellt.")
+        return 0
+    sec = mapping_section(data)
+    if not enable:
+        sec.pop("0", None)
+        save(path, data)
+        print("Steam Play für alle Spiele: aus")
+        return 0
+    if "0" in sec and not force:
+        print(f"Bereits eingestellt: {status()}")
+        return 0
+    sec["0"] = {"name": default_tool(), "config": "", "priority": "75"}
+    save(path, data)
+    print(f"Steam Play für alle Spiele: {status()}")
+    return 0
+
+
+def main():
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "status"
+    if cmd == "status":
+        print(status())
+        return 0
+    if cmd == "apply":
+        return set_mapping(force=False)
+    if cmd == "enable":
+        return set_mapping(force=True)
+    if cmd == "disable":
+        return set_mapping(force=True, enable=False)
+    print(__doc__)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

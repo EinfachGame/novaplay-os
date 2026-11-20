@@ -18,10 +18,26 @@ ufw --force enable
 echo "==> Schnellste Download-Server suchen"
 timeout 120 reflector --latest 20 --protocol https --sort rate --save /etc/pacman.d/mirrorlist || true
 
+FEHLER=0
+
+echo "==> GE-Proton prüfen"
+if ! ls -d /usr/share/steam/compatibilitytools.d/GE-Proton* >/dev/null 2>&1; then
+    # Klappt der Download nicht, geht es trotzdem weiter – beim nächsten Start neuer Versuch.
+    /usr/local/bin/novaplay-fetch-proton-ge install || FEHLER=1
+fi
+
 echo "==> Heroic, ProtonUp-Qt und Discord installieren (Flatpak)"
-flatpak remote-add --system --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo || exit 1
-flatpak install --system --noninteractive -y flathub \
-    com.heroicgameslauncher.hgl net.davidotek.pupgui2 com.discordapp.Discord || exit 1
+if flatpak remote-add --system --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo; then
+    flatpak install --system --noninteractive --or-update -y flathub \
+        com.heroicgameslauncher.hgl net.davidotek.pupgui2 com.discordapp.Discord || FEHLER=1
+else
+    FEHLER=1
+fi
+
+if [ "$FEHLER" -ne 0 ]; then
+    echo "==> Noch nicht alles geschafft (Internet?) – neuer Versuch beim nächsten Start bzw. gleich."
+    exit 1
+fi
 
 mkdir -p /var/lib/novaplay && touch "$DONE"
 echo "==> Ersteinrichtung abgeschlossen"

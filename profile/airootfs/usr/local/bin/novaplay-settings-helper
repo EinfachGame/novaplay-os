@@ -1,0 +1,67 @@
+#!/bin/bash
+# =====================================================================
+#  NovaPlay OS – Hilfsprogramm für Einstellungen mit Administratorrechten.
+#  Wird von "NovaPlay Einstellungen" über pkexec aufgerufen und erlaubt
+#  nur diese festen Aktionen:
+#
+#    session plasma|console     Start in Desktop oder Konsolen-Modus
+#    autologin on <benutzer>    automatische Anmeldung an
+#    autologin off              automatische Anmeldung aus
+#    firewall on|off            Firewall ein/aus
+# =====================================================================
+set -euo pipefail
+CONF=/etc/sddm.conf.d/10-novaplay.conf
+
+[ "$(id -u)" -eq 0 ] || { echo "Nur mit Administratorrechten."; exit 1; }
+
+get_key() { sed -n "s/^$1=//p" "$CONF" 2>/dev/null | head -n 1; }
+
+write_conf() {  # $1 = Benutzer (leer = keine Auto-Anmeldung), $2 = Sitzung
+    mkdir -p "$(dirname "$CONF")"
+    {
+        echo "[Theme]"
+        echo "Current=breeze"
+        if [ -n "$1" ]; then
+            echo
+            echo "[Autologin]"
+            echo "User=$1"
+            echo "Session=$2"
+        fi
+    } > "$CONF.tmp"
+    mv "$CONF.tmp" "$CONF"
+}
+
+case "${1:-}" in
+    session)
+        case "${2:-}" in
+            plasma) s=plasma ;;
+            console) s=novaplay-steam ;;
+            *) echo "plasma oder console"; exit 1 ;;
+        esac
+        user=$(get_key User)
+        [ -n "$user" ] || { echo "Der Konsolen-Modus beim Start braucht die automatische Anmeldung."; exit 3; }
+        write_conf "$user" "$s"
+        ;;
+    autologin)
+        case "${2:-}" in
+            on)
+                u="${3:-}"
+                [[ "$u" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] && id "$u" >/dev/null 2>&1 || { echo "Unbekannter Benutzer"; exit 1; }
+                write_conf "$u" "$(get_key Session | grep . || echo plasma)"
+                ;;
+            off) write_conf "" "" ;;
+            *) echo "on oder off"; exit 1 ;;
+        esac
+        ;;
+    firewall)
+        case "${2:-}" in
+            on) ufw --force enable ;;
+            off) ufw disable ;;
+            *) echo "on oder off"; exit 1 ;;
+        esac
+        ;;
+    *)
+        sed -n '3,11p' "$0"
+        exit 1
+        ;;
+esac

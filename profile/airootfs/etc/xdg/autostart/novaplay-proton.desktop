@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=NovaPlay Steam Play einrichten
+Exec=/usr/local/bin/novaplay-proton apply
+OnlyShowIn=KDE;
+NoDisplay=true
